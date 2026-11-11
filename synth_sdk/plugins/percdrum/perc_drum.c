@@ -119,6 +119,19 @@ static uint8_t pv_slot[PD_VOICES], pv_pad[PD_VOICES], pv_vel[PD_VOICES];
 static uint32_t pv_t[PD_VOICES], pv_clock;
 volatile uint32_t pd_hit_seq; volatile int32_t pd_hit_vel;
 
+/* ---- breadcrumbs (debug build): the last step each thread entered, shown top-right on the perc page as
+ * "u<ui> a<audio> t<tick>". A freeze leaves the last frame on screen: tick frozen + a moving stopped -> that thread
+ * hung there; tick moving but animation lags -> heavy per-frame work at that step. Remove by clearing PERC_BC. */
+#define PERC_BC 1
+#if PERC_BC
+volatile uint32_t perc_bc_ui, perc_bc_au, perc_bc_tick;
+#define BCU(x) (perc_bc_ui = (x))
+#define BCA(x) (perc_bc_au = (x))
+#else
+#define BCU(x) ((void)0)
+#define BCA(x) ((void)0)
+#endif
+
 #ifndef OP1_HOST
 static int voice_index(void *self) { for (int i = 0; i < PD_VOICES; i++) if (VOICE_OBJ[i] == self) return i; return -1; }
 static stock_voice *model(void *self) { return (stock_voice *)((uint8_t *)self + 8); }
@@ -133,6 +146,7 @@ static void pd_note_on(void *self, const void *pad)
     int p = VOICE_PAD[v]; if ((unsigned)p >= PD_PADS) p = 0;
     int vel = VOICE_VEL[v] >> 8;
     pv_slot[v] = (uint8_t)slot; pv_pad[v] = (uint8_t)p; pv_vel[v] = (uint8_t)vel;
+    BCA(40);
     pv_fade[v] = 0; pv_t[v] = ++pv_clock;
     pv_pending[v] = 1;                                        /* set up in render: one context builds the voice */
     pv_on[v] = 1;                                             /* (after pending: render never sees on without it) */
@@ -155,10 +169,11 @@ static void pd_render(void *self, int16_t *out, const void *pad)
         const pd_key *k = &kit[pv_slot[v]][pv_pad[v]];
         perc_macro_t mc; macros_of(k, &mc);
         static uint16_t mp[21];                               /* audio context only */
-        perc_prepare(&pv[v].p, key_patch(k, mp), &mc, pv_vel[v]);
+        BCA(41); perc_prepare(&pv[v].p, key_patch(k, mp), &mc, pv_vel[v]);
         perc_trigger(&pv[v]);
         pv[v].prev = 0;
     }
+    BCA(42);
     int16_t half[64];
     int alive = perc_render(&pv[v], half, 64, 0);              /* pitch: the key's own (the stock pitch word is not used) */
     int32_t prev = pv[v].prev;
@@ -192,6 +207,7 @@ static void xfer_step(int slot)
     const uint8_t *sb = kit_sample(slot);
     if (!sb) return;
     if (xf_slot < 0) {
+        BCU(20);
         const int16_t *pk = (const int16_t *)(sb + 4);
         uint32_t h = 2166136261u;
         for (int i = 0; i < OP1_PEAK_BUCKETS; i++) { h ^= (uint16_t)pk[i]; h *= 16777619u; }
@@ -200,13 +216,13 @@ static void xfer_step(int slot)
         xf_sig[slot] = h;
         xf_len = kit_length(sb);
         if (!xf_len) return;
-        perc_xfer_begin(&xf_dec); xf_slot = slot; xf_pos = 0;
+        BCU(21); perc_xfer_begin(&xf_dec); xf_slot = slot; xf_pos = 0;
         xf_data = *(const int16_t *const *)sb + 8;           /* after the 8 guard samples */
         return;
     }
     if (xf_slot != slot) { xf_sig[xf_slot] = 0; xf_slot = -1; return; }
     uint32_t n = xf_len - xf_pos; if (n > 8192) n = 8192;
-    perc_xfer_push(&xf_dec, xf_data + xf_pos, n); xf_pos += n;
+    BCU(22); perc_xfer_push(&xf_dec, xf_data + xf_pos, n); xf_pos += n; BCU(23);
     if (xf_dec.done || xf_pos >= xf_len) {
         int any = 0; for (int i = 0; i < PD_XFER; i++) any |= xf_dec.have[i] & 1;
         if (any) for (int i = 0; i < PD_XFER; i++) {
@@ -282,6 +298,7 @@ static void pd_slot_loaded(int slot, void *op1r)
 {
     if ((unsigned)slot >= PD_SLOTS) return;
     if (!ours(op1r)) { claimed[slot] = 0; return; }
+    BCU(50);
     for (int p = 0; p < PD_PADS; p++) key_default(&kit[slot][p], p);
     const void *h = JV_CGET(op1r, "keys");
     const char *t = h && jv_type(h) == JV_STRING ? *(const char *const *)h : 0;
@@ -352,7 +369,7 @@ static void pd_flush(void)
         if (!op1_patch_idle()) return;                        /* a save / type job runs: on the next turn or key */
         dirty_keys[slot] = 0;
         if (!claimed[slot]) continue;
-        kit_write(slot, k);
+        BCU(31); kit_write(slot, k); BCU(32);
         DRUM_TO_PATCH(DRUM_PATCH(slot));                      /* marks the patch changed: the delayed save writes it */
     }
 }
@@ -362,6 +379,7 @@ static void pd_type_job(void *job)
 {
     int slot = *(int32_t *)((uint8_t *)job + 4), sel = *(int32_t *)((uint8_t *)job + 8);
     if ((unsigned)slot >= PD_SLOTS) { TYPE_JOB(job); return; }
+    BCU(60);
     void *json = (uint8_t *)DRUM_PATCH(slot) + 4;
     uint32_t tmp[4];
     if (sel < 2) {
@@ -473,7 +491,12 @@ static void pd_init(void *scr) { (void)scr; }
 static void pd_update(void *scr, int dt)
 {
     int slot = DRUM_SLOT_CUR, pad = pd_pad();
+#if PERC_BC
+    perc_bc_tick++;
+#endif
+    BCU(10);
     xfer_step(slot);
+    BCU(11);
     const pd_key *k = &kit[slot][pad];
     perc_view_t v;
     v.type = k->sound < PERC_FACTORY_COUNT ? k->sound : PERC_FACTORY_COUNT;
@@ -484,8 +507,15 @@ static void pd_update(void *scr, int dt)
     static char name[20], idx[16];
     if (k->sound < PERC_FACTORY_COUNT) cat(name, PERC_FACTORY_NAME[k->sound]);
     else { char *p = cat(name, "po-32 "); num2(p, k->sound - PERC_FACTORY_COUNT + 1); }
+#if PERC_BC
+    { char *p = idx;
+      *p++='u'; p=num2(p,(int)(perc_bc_ui%100));
+      *p++='a'; p=num2(p,(int)(perc_bc_au%100));
+      *p++='t'; p=num2(p,(int)(perc_bc_tick%100)); }
+#else
     if (xf_slot >= 0) cat(idx, "read..");
     else { char *p = cat(idx, "key "); num2(p, pad + 1); }
+#endif
     v.name = name; v.idx = idx;
     v.shift = SHIFT_HELD; v.page2[0] = v.page2[1] = v.page2[2] = 0;
     v.blue2 = "sound";
