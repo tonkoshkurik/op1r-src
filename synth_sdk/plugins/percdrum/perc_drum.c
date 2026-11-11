@@ -1,18 +1,10 @@
 #pragma GCC optimize ("no-tree-loop-distribute-patterns") /* no implicit libc calls */
 /* perc drum kit (plugin.json "kind": "drum", docs/43): a drum type next to drum, dbox and drum+. Each of the 24 keys
  * plays its own perc sound (a PO-32 patch: a built-in one, or one transferred into the kit's sample), with its own
- * pitch, length, punch, tone, drive, level and morph, saved with the kit, one short string per key:
- *   "op1r": {"engine": "perc", "keys": ["<50 words, 4 hex digits each>", x 24]}
- *   a key: 21 left patch words, pitch, length, punch, tone, drive, level, sound, morph, 21 right patch words
- * Read too: "keys" as one 4800-digit string (one test build), "perc": [[28 or 50 ints] x 24] (earlier builds; left in
- * place, not removed). Without a right side: right = left.
- * Knob turns change the keys in memory; the JSON is written later, only while no patch job (save / type job) runs,
- * from the key thread, never waiting (pd_flush).
- *
- * T1 page (the selected key, as the OP-1's drum pages):  blue pitch, green length, white punch, orange tone;
- * Shift + blue the sound (10 built-in, then po-32 1..16 from the kit's sample), Shift + green drive, Shift + white
- * level, Shift + orange morph (left -> right side of a PO-32 sound, as the PO-32's morph); Shift + blue press: every
- * key from the transfer (key n = po-32 n). One knob click = one semitone / one sound / 1/32 of the range.
+ * pitch, length, punch, tone, drive, level and morph, saved with the kit compactly:
+ *   "op1r": {"engine": "perc", "pk": [[sound, pitch, length, punch, tone, drive, level, morph], x 24]}
+ * A built-in sound rebuilds its 21+21 patch words from its index; a transferred PO-32 sound appends them (50
+ * ints). Earlier kits ("perc": int arrays) are read too. A fresh kit is ~1 KB (a big patch froze R246 on save).
  * A perc kit is made from a sampled drum kit (Shift + T1, "perc"); its sample is not played: a PO-32 transfer
  * recorded into it (12 s: a whole kit, both sides) brings sounds.
  *
@@ -278,19 +270,29 @@ static void key_fix_right(pd_key *k)
     for (int i = 0; i < 21; i++) if (k->patch[i] != PERC_FACTORY[k->sound][i] || k->right[i] != k->patch[i]) return;
     for (int i = 0; i < 21; i++) k->right[i] = PERC_FACTORY_R[k->sound][i];
 }
-static int hexv(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; }
-#define PD_KEYHEX (PD_NF * 4)                                 /* hex digits per key */
-#define PD_HEX (PD_PADS * PD_KEYHEX)
-/* a key from its PD_KEYHEX digits (unchanged if any is not a hex digit, e.g. a short string) */
-static void key_from_hex(pd_key *dst, const char *t)
+static uint16_t clampw(int32_t x) { return (uint16_t)(x < 0 ? 0 : x > 65535 ? 65535 : x); }
+/* compact per-key save ("pk", docs/43): sound, 6 knobs, morph (8 ints); a built-in sound rebuilds its patch from
+ * PERC_FACTORY/PERC_FACTORY_R by index, so only a transferred sound also stores its 21+21 patch words (50 ints).
+ * A fresh kit saves ~1 KB, well under the stock save path's budget (a 5 KB patch froze R246 on save). */
+static int pk_len(const pd_key *k) { return k->sound >= PERC_FACTORY_COUNT ? 8 + 42 : 8; }
+static int32_t pk_put(const pd_key *k, int i)
 {
-    pd_key k = *dst;
-    for (int f = 0; f < PD_NF; f++) {
-        int32_t x = 0;
-        for (int d = 0; d < 4; d++) { int n = hexv(t[f * 4 + d]); if (n < 0) return; x = x << 4 | n; }
-        key_get(&k, f, x);
+    switch (i) {
+    case 0: return k->sound;  case 1: return k->pitch; case 2: return k->length; case 3: return k->punch;
+    case 4: return k->tone;   case 5: return k->drive; case 6: return k->level;  case 7: return k->morph;
+    default: return i < 29 ? k->patch[i - 8] : k->right[i - 29];
     }
-    key_fix_right(&k);
+}
+static void pk_get(pd_key *dst, const int32_t *a, int n)
+{
+    if (n < 8) return;
+    pd_key k = *dst;
+    k.sound = (uint8_t)(a[0] < 0 ? 0 : a[0] > 255 ? 255 : a[0]);
+    k.pitch = clamp15(a[1]); k.length = clamp15(a[2]); k.punch = clamp15(a[3]);
+    k.tone = clamp15(a[4]);  k.drive = clamp15(a[5]);  k.level = clamp15(a[6]); k.morph = clamp15(a[7]);
+    if (n >= 50) { for (int i = 0; i < 21; i++) { k.patch[i] = clampw(a[8 + i]); k.right[i] = clampw(a[29 + i]); } }
+    else if (k.sound < PERC_FACTORY_COUNT) { for (int i = 0; i < 21; i++) { k.patch[i] = PERC_FACTORY[k.sound][i]; k.right[i] = PERC_FACTORY_R[k.sound][i]; } }
+    else { k.sound = 0; for (int i = 0; i < 21; i++) { k.patch[i] = PERC_FACTORY[0][i]; k.right[i] = PERC_FACTORY_R[0][i]; } }
     *dst = k;
 }
 
@@ -300,20 +302,19 @@ static void pd_slot_loaded(int slot, void *op1r)
     if (!ours(op1r)) { claimed[slot] = 0; return; }
     BCU(50);
     for (int p = 0; p < PD_PADS; p++) key_default(&kit[slot][p], p);
-    const void *h = JV_CGET(op1r, "keys");
-    const char *t = h && jv_type(h) == JV_STRING ? *(const char *const *)h : 0;
-    unsigned tl = 0; if (t) while (tl <= PD_HEX && t[tl]) tl++;
-    if (h && jv_type(h) == JV_ARRAY) {                        /* "keys": a string per key */
-        void *arr = JV_KEY(op1r, "keys");
+    const void *pk = JV_CGET(op1r, "pk");
+    if (pk && jv_type(pk) == JV_ARRAY) {                      /* "pk": the compact per-key arrays */
+        void *arr = JV_KEY(op1r, "pk");
         unsigned n = JV_SIZE(arr);
         for (unsigned p = 0; p < n && p < PD_PADS; p++) {
-            const void *e = JV_IDX(arr, p);
-            const char *ks = jv_type(e) == JV_STRING ? *(const char *const *)e : 0;
-            if (ks) key_from_hex(&kit[slot][p], ks);
+            void *e = JV_IDX(arr, p);
+            unsigned m = jv_type(e) == JV_ARRAY ? JV_SIZE(e) : 0;
+            if (m > 50) m = 50;
+            int32_t a[50];
+            for (unsigned f = 0; f < m; f++) a[f] = jv_int(JV_IDX(e, f));
+            pk_get(&kit[slot][p], a, (int)m);
         }
-    } else if (tl == PD_HEX) {                                /* "keys": one string (one test build) */
-        for (int p = 0; p < PD_PADS; p++) key_from_hex(&kit[slot][p], t + p * PD_KEYHEX);
-    } else {                                                  /* "perc": the arrays of earlier builds */
+    } else {                                                  /* "perc": the int arrays of earlier builds */
         const void *a = JV_CGET(op1r, "perc");
         if (a && jv_type(a) == JV_ARRAY) {
             void *arr = JV_KEY(op1r, "perc");
@@ -332,30 +333,26 @@ static void pd_slot_loaded(int slot, void *op1r)
     }
     claimed[slot] = 1;
 }
-/* keys of the slot (bit per key) -> op1r.keys[key], a 200-digit string each; nothing is removed. Only while no patch
- * job serializes the patch: from inside a type job, or after op1_patch_idle() on the key thread. */
+/* keys of the slot (bit per key) -> op1r.pk[key], a compact int array each (pk_put). Nothing is removed. Only while no
+ * patch job serializes the patch: from inside a type job, or after op1_patch_idle() on the key thread. */
 #define JV_NULL_C ((void *(*)(void *, int))0x019BFA30)        /* Value(ValueType) (patch_repair.c) */
-static char keyhex[PD_KEYHEX + 1];
 static void kit_write(int slot, uint32_t keys)
 {
     void *json = (uint8_t *)DRUM_PATCH(slot) + 4;
     void *op = JV_KEY(json, "op1r");
     if (!ours(op)) return;
     uint32_t tmp[4];
-    void *arr = JV_KEY(op, "keys");
-    if (jv_type(arr) != JV_ARRAY) {                           /* absent (null) or the one-string form: a fresh array */
-        if (jv_type(arr) != JV_NULL) { JV_NULL_C(tmp, JV_NULL); JV_ASSIGN(arr, tmp); JV_DTOR(tmp, 2); }
+    void *arr = JV_KEY(op, "pk");
+    if (jv_type(arr) != JV_ARRAY) {                           /* absent (null) or another form: a fresh array */
+        JV_NULL_C(tmp, JV_ARRAY); JV_ASSIGN(arr, tmp); JV_DTOR(tmp, 2);
         keys = (1u << PD_PADS) - 1;                           /* every key, so no entry stays null */
     }
-    static const char hx[] = "0123456789abcdef";
     for (int p = 0; p < PD_PADS; p++) if (keys >> p & 1) {
-        char *c = keyhex;
-        for (int f = 0; f < PD_NF; f++) {
-            uint32_t x = (uint32_t)key_put(&kit[slot][p], f) & 0xffffu;
-            c[0] = hx[x >> 12]; c[1] = hx[(x >> 8) & 15]; c[2] = hx[(x >> 4) & 15]; c[3] = hx[x & 15]; c += 4;
-        }
-        *c = 0;
-        JV_FROM_STR(tmp, keyhex); JV_ASSIGN(JV_IDX(arr, (unsigned)p), tmp); JV_DTOR(tmp, 2);
+        const pd_key *k = &kit[slot][p];
+        int len = pk_len(k);
+        void *e = JV_IDX(arr, (unsigned)p);
+        JV_NULL_C(tmp, JV_ARRAY); JV_ASSIGN(e, tmp); JV_DTOR(tmp, 2);   /* fresh inner array (resets its length) */
+        for (int f = 0; f < len; f++) { JV_FROM_INT(tmp, pk_put(k, f)); JV_ASSIGN(JV_IDX(e, (unsigned)f), tmp); JV_DTOR(tmp, 2); }
     }
 }
 static volatile uint32_t dirty_keys[PD_SLOTS];               /* keys changed since kit_write (key thread only) */
