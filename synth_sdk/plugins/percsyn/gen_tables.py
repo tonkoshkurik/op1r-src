@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate perc_tables.h: integer math tables, constants and the factory sounds.
 
-    python3 plugins/perc/gen_tables.py      (from synth_sdk; rewrites plugins/perc/perc_tables.h)
+    python3 plugins/percsyn/gen_tables.py   (from synth_sdk; rewrites plugins/percsyn/perc_tables.h)
 
 The factory sounds are written in musical units (Hz, ms, semitones, dB) and stored as PO-32 patch words
 (21 x 0..65535), the same format a transfer brings in, through the parameter maps documented in libpo32's

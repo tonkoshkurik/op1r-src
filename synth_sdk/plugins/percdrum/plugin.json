@@ -5,8 +5,8 @@
   "symbol": "PERCDRUM",
   "sources": [
     "perc_drum.c",
-    "../perc/perc_dsp.c",
-    "../perc/perc_xfer.c",
-    "../perc/perc_draw.c"
+    "../percsyn/perc_dsp.c",
+    "../percsyn/perc_xfer.c",
+    "../percsyn/perc_draw.c"
   ]
 }

@@ -13,10 +13,10 @@
  * note_on / note_off / render do, so the firmware's voice allocation works as for a sampled kit. At most PD_SYNTH voices
  * synthesise at once (the oldest fades out). GPL-3.0-or-later with the OP1R firmware permission. */
 #include "../../op1_synth.h"
-#include "../perc/perc_dsp.h"
-#include "../perc/perc_tables.h"
-#include "../perc/perc_xfer.h"
-#include "../perc/perc_draw.h"
+#include "../percsyn/perc_dsp.h"
+#include "../percsyn/perc_tables.h"
+#include "../percsyn/perc_xfer.h"
+#include "../percsyn/perc_draw.h"
 
 #define PD_SLOTS  8
 #define PD_PADS   24
