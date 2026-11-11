@@ -45,6 +45,12 @@ static void run(const char *name, size_t n, size_t max_n, int expect_min)
     for (int in = 0; in < 16; in++) for (int s = 0; s < 2; s++) if (x->have[in] & (1 << s)) {
         if (!memcmp(x->patch[in][s], sent[in][s], sizeof sent[in][s])) ok++; else bad++;
     }
+    /* the same patches in arrival order (a drum kit fills its keys from this list): instrument e, both sides paired */
+    for (int e = 0; e < x->list_n; e++) {
+        int in = x->list_inst[e];
+        if (in != e || memcmp(x->list[e][0], sent[in][0], 42) || memcmp(x->list[e][1], sent[in][x->list_right[e] ? 1 : 0], 42)) bad++;
+    }
+    if (x->list_n * 2 < ok - 1) bad++;
     /* reference: libpo32's float demodulator on the same 16-bit audio */
     static float f[MAXN]; for (size_t i = 0; i < n; i++) f[i] = pcm[i] / 32768.0f;
     po32_demodulator_t d; po32_demodulator_init(&d, FS); int ref = 0;
@@ -67,6 +73,25 @@ int main(void)
     clean_n = po32_render_sample_count(flen, FS);
     po32_render_dpsk_f32(frame, flen, FS, clean, MAXN);
     const size_t six = 264600;
+    {   /* side b before side a, and a later single sound with the same instrument number: paired, in order */
+        static uint8_t fr2[4096]; po32_builder_t b2; po32_builder_init(&b2, fr2, sizeof fr2);
+        static const uint8_t cmd[5] = { 0x23, 0x13, 0x15, 0x25, 0x17 };   /* b3 a3 a5 b5 a7 */
+        for (int k = 0; k < 5; k++) { uint8_t pl[43]; pl[0] = cmd[k]; int in = cmd[k] & 15, sd = (cmd[k] >> 4) - 1;
+            for (int i = 0; i < 21; i++) { pl[1 + 2 * i] = (uint8_t)sent[in][sd][i]; pl[2 + 2 * i] = (uint8_t)(sent[in][sd][i] >> 8); }
+            po32_builder_append_packet(&b2, PO32_TAG_PATCH, pl, 43, NULL); }
+        size_t fl2; po32_builder_finish(&b2, &fl2);
+        size_t n2 = po32_render_sample_count(fl2, FS); po32_render_dpsk_f32(fr2, fl2, FS, work, MAXN);
+        size_t gap = FS / 4, tot = n2 + gap + n2;                         /* the same transfer recorded twice */
+        for (size_t i = 0; i < n2; i++) pcm[i] = pcm[n2 + gap + i] = (int16_t)(work[i] * 26000);
+        for (size_t i = 0; i < gap; i++) pcm[n2 + i] = 0;
+        perc_xfer_decode_into(1, pcm, (unsigned)tot);
+        const perc_xfer_t *x = perc_xfer_last();
+        static const int want[3] = { 3, 5, 7 }; int ok2 = x->list_n == 6;
+        for (int e = 0; e < 6 && ok2; e++) { int in = want[e % 3];
+            ok2 = x->list_inst[e] == in && x->list_right[e] == (in != 7) && x->list_ses[e] != x->list_ses[(e + 3) % 6]
+                && !memcmp(x->list[e][0], sent[in][0], 42) && !memcmp(x->list[e][1], sent[in][in != 7], 42); }
+        printf("ordered list: side b first, two transfers in one recording: %d entries   %s\n", x->list_n, ok2 ? "ok" : "FAIL");
+    }
     printf("transfer: 32 patch packets, %.2f s; a slot's sample keeps 6.00 s\n", clean_n / (double)FS);
 
     for (size_t i = 0; i < clean_n; i++) work[i] = clean[i] * 0.8f;

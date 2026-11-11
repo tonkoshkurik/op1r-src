@@ -75,6 +75,17 @@ static void on_byte(perc_xfer_t *x, uint8_t b)
             uint16_t *dst = x->patch[inst][side - 1];
             for (int i = 0; i < 21; i++) dst[i] = (uint16_t)(p[1 + 2 * i] | (p[2 + 2 * i] << 8));
             x->have[inst] |= (uint8_t)side;
+            /* list_right: 0 side a only, 1 both, 2 side b only so far (it came first) */
+            int e = -1;
+            for (int i = x->list_n - 1; i >= 0 && e < 0; i--)
+                if (x->list_inst[i] == inst && x->list_ses[i] == x->session && x->list_right[i] == (side == 1 ? 2 : 0)) e = i;
+            if (e >= 0) x->list_right[e] = 1;
+            else if (x->list_n < PERC_XFER_LIST) {
+                e = x->list_n++;
+                x->list_inst[e] = (uint8_t)inst; x->list_ses[e] = x->session; x->list_right[e] = side == 1 ? 0 : 2;
+                if (side == 1) for (int i = 0; i < 21; i++) x->list[e][1][i] = dst[i];   /* until side b comes: b = a */
+            }
+            if (e >= 0) for (int i = 0; i < 21; i++) x->list[e][side - 1][i] = dst[i];
         }
     }
 }
@@ -103,7 +114,7 @@ static void boundary(perc_xfer_t *x)
             x->win_lo = (x->win_lo >> 1) | (x->win_hi << 31);
             x->win_hi = (x->win_hi >> 1) | (bit << 31);
             if (x->win_lo == SYNC_LO && x->win_hi == SYNC_HI) {   /* re-syncs for a further transfer in one recording */
-                x->synced = 1; x->crc = 0x1D0F; x->cur = 0; x->bits = 0; x->work_len = 0;
+                x->synced = 1; x->session++; x->crc = 0x1D0F; x->cur = 0; x->bits = 0; x->work_len = 0;
             }
         } else {
             x->cur |= (uint8_t)(bit << x->bits);

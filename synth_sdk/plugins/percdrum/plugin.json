@@ -6,7 +6,6 @@
   "sources": [
     "perc_drum.c",
     "../percsyn/perc_dsp.c",
-    "../percsyn/perc_xfer.c",
-    "../percsyn/perc_draw.c"
+    "../percsyn/perc_xfer.c"
   ]
 }
