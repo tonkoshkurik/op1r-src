@@ -21,6 +21,7 @@ static void ps_update(void *scr, int dt)
     v.type = perc_type_of(w);
     v.has_patch = perc_patch_of(v.type) != 0;
     v.drive = w[6]; v.level = w[7];
+    v.morph = 0; v.morph_lane = 0;                                  /* no fourth Shift word on a synth */
     static char name[16], idx[16];
     if (v.type < PERC_FACTORY_COUNT) cat(name, PERC_FACTORY_NAME[v.type]);
     else { char *p = cat(name, "po-32 "); p = num2(p, v.type - PERC_FACTORY_COUNT + 1); if (!v.has_patch) cat(p, " empty"); }

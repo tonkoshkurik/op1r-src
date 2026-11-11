@@ -6,7 +6,7 @@
  *   shockwave     green rings from the drum on every hit, wider and slower with the length
  *   strike        a white starburst at the hit, longer with the punch
  *   floor         an orange perspective grid, denser with a brighter tone; it shimmers with the noise
- *   bottom row    the four encoders (labels in their colours, values in white); Shift: type, drive, level
+ *   bottom row    the four encoders (labels in their colours, values in white); Shift: type, drive, level (, morph)
  *
  * Everything is drawn in code (the SVG is empty). GPL-3.0-or-later with the OP1R firmware permission. */
 #include "op1_synth.h"                    /* stock-font text (firmware calls, no imports) */
@@ -248,7 +248,9 @@ void perc_draw_page(void *scr, int dt, const perc_view_t *pv)
         int32_t db10 = pv->level > 0 ? (pv->level - 16384) * 120 / 16384 : 0;
         txt(TX_LAB + 2, "level"); { char *p = v; if (db10 > 0) *p++ = '+'; put(dec1(p, db10), "db"); } txt(TX_VAL + 2, v);
     } else { txt(TX_LAB + 2, "punch"); put(snum(v, ((k[2] - 16384) * 100) >> 14), "%"); txt(TX_VAL + 2, v); }
-    if (sh) { txt(TX_LAB + 3, " "); txt(TX_VAL + 3, " "); }
+    if (sh && pv->morph_lane == 1) { txt(TX_LAB + 3, "morph"); put(num(v, (pv->morph * 100 + 16383) >> 15), "%"); txt(TX_VAL + 3, v); }
+    else if (sh && pv->morph_lane == 2) { txt(TX_LAB + 3, "morph"); txt(TX_VAL + 3, "1 side"); }
+    else if (sh) { txt(TX_LAB + 3, " "); txt(TX_VAL + 3, " "); }
     else { int32_t t10 = ((k[3] - 16384) * 30) >> 14; txt(TX_LAB + 3, "tone"); { char *p = v; if (t10 > 0) *p++ = '+'; put(dec1(p, t10), " oct"); } txt(TX_VAL + 3, v); }
 }
 

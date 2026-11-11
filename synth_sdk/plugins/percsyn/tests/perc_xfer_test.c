@@ -1,5 +1,5 @@
 /* perc's transfer reader against transfers made by libpo32's modulator (host only).
- *   cc -O2 -DOP1_HOST -I.. -I../../.. -I$LIBPO32/core/include -I$LIBPO32/core/src perc_xfer_test.c ../perc_xfer.c \
+ *   cc -O2 -DOP1_HOST -I.. -I../../.. -I$LIBPO32/core/include -I$LIBPO32/core/src perc_xfer_test.c ../perc_xfer.c ../perc_xbank.c \
  *      $LIBPO32/core/src/po32.c -lm -o perc_xfer_test && ./perc_xfer_test
  * A 16-instrument transfer (both morph sides) is rendered at 44.1 kHz, impaired like a speaker-to-mic recording and cut
  * to the 6 s a slot's sample holds; perc's integer decoder must recover every patch that is complete in it, the same
@@ -72,12 +72,14 @@ int main(void)
     for (size_t i = 0; i < clean_n; i++) work[i] = clean[i] * 0.8f;
     run("clean, full transfer (no 6 s cut)", clean_n, MAXN, 32);
     run("clean, 6 s", clean_n, six, 15);
+    run("clean, 12 s (a drum kit's sample)", clean_n, 529152, 32);
     for (size_t i = 0; i < clean_n; i++) work[i] = clean[i] * 0.03f;
     run("quiet (-30 dB)", clean_n, six, 15);
     for (size_t i = 0; i < clean_n; i++) { float v = clean[i] * 4; work[i] = v > 0.9f ? 0.9f : v < -0.9f ? -0.9f : v; }
     run("clipped (x4, hard)", clean_n, six, 15);
     for (size_t i = 0; i < clean_n; i++) work[i] = clean[i] * 0.5f + (float)((frand() - 0.5) * 0.5);
     run("noise (SNR ~ 10 dB)", clean_n, six, 15);
+    run("noise (SNR ~ 10 dB), 12 s", clean_n, 529152, 32);
     { size_t lead = FS / 2; for (size_t i = 0; i < lead; i++) work[i] = (float)((frand() - 0.5) * 0.01);
       for (size_t i = 0; i < clean_n; i++) work[lead + i] = clean[i] * 0.5f;
       run("0.5 s room noise first", clean_n + lead, six, 13); }

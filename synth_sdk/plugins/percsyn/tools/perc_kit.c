@@ -1,10 +1,14 @@
-/* perc_kit: make short PO-32 transfers that fit one perc recording (6 s), on the computer.
+/* perc_kit: make PO-32 transfers that fit one perc recording, on the computer.
  *
- *   perc_kit kit.mtpreset out.wav            Microtonic preset: its 8 drums -> one transfer (about 3.5 s)
- *   perc_kit transfer.wav out_prefix         a PO-32 transfer (44.1 kHz mono WAV, e.g. from afconvert): its 16
- *                                            instruments -> out_prefix_1-8.wav and out_prefix_9-16.wav
+ *   perc_kit kit.mtpreset out.wav            Microtonic preset: its 8 drums -> one transfer (about 3.5 s; a
+ *                                            preset has one side per drum)
+ *   perc_kit transfer.wav out_prefix         a PO-32 transfer (44.1 kHz mono WAV, e.g. from afconvert):
+ *                                              out_prefix_kit.wav    16 instruments, both morph sides, for a perc
+ *                                                                    drum kit (12 s sample)
+ *                                              out_prefix_1-8.wav, out_prefix_9-16.wav   left sides, for the perc
+ *                                                                    synth engine (6 s sample)
  *
- * Each output carries left-side patches only (perc plays the left side), 0.3 s of silence first and 0.5 s after.
+ * Each output has 0.3 s of silence first and 0.2 s after.
  * Play it into the OP-1 (input on a perc slot) or record it into the slot any other way. The names of the drums go
  * to stdout. Uses libpo32 (MIT, Eric Lewis) for the Microtonic text import, the encoder and the modulator:
  *   cc -O2 -I.. -I$LIBPO32/core/include -I$LIBPO32/core/src perc_kit.c $LIBPO32/core/src/po32.c \
@@ -16,21 +20,22 @@
 #include <string.h>
 
 #define FS 44100
-static uint16_t patch[16][21]; static int have[16]; static char name[16][64];
+static uint16_t patch[16][2][21]; static int have[16]; static char name[16][64];   /* have: bit 0 left, bit 1 right */
 
-static int write_transfer(const char *path, int first, int last)
+static int write_transfer(const char *path, int first, int last, int sides, double max_s)
 {
-    static uint8_t frame[8192]; po32_builder_t b; po32_builder_init(&b, frame, sizeof frame);
+    static uint8_t frame[16384]; po32_builder_t b; po32_builder_init(&b, frame, sizeof frame);
     int n = 0;
-    for (int i = first; i <= last; i++) if (have[i]) {
-        uint8_t pl[43]; pl[0] = (uint8_t)(0x10 | i);
-        for (int k = 0; k < 21; k++) { pl[1 + 2 * k] = (uint8_t)patch[i][k]; pl[2 + 2 * k] = (uint8_t)(patch[i][k] >> 8); }
-        if (po32_builder_append_packet(&b, PO32_TAG_PATCH, pl, 43, NULL) != PO32_OK) return -1;
-        n++;
-    }
+    for (int i = first; i <= last; i++) if (have[i] & 1)
+        for (int sd = 0; sd < 2; sd++) if ((sides >> sd & 1) && (have[i] >> sd & 1)) {
+            uint8_t pl[43]; pl[0] = (uint8_t)((sd ? 0x20 : 0x10) | i);
+            for (int k = 0; k < 21; k++) { pl[1 + 2 * k] = (uint8_t)patch[i][sd][k]; pl[2 + 2 * k] = (uint8_t)(patch[i][sd][k] >> 8); }
+            if (po32_builder_append_packet(&b, PO32_TAG_PATCH, pl, 43, NULL) != PO32_OK) return -1;
+            if (!sd) n++;
+        }
     if (!n) return 0;
     size_t flen; if (po32_builder_finish(&b, &flen) != PO32_OK) return -1;
-    size_t ns = po32_render_sample_count(flen, FS), lead = FS * 3 / 10, tail = FS / 2;
+    size_t ns = po32_render_sample_count(flen, FS), lead = FS * 3 / 10, tail = FS / 5;
     float *buf = calloc(ns, sizeof(float)); po32_render_dpsk_f32(frame, flen, FS, buf, ns);
     FILE *f = fopen(path, "wb"); if (!f) { free(buf); return -1; }
     int bytes = (int)(lead + ns + tail) * 2;
@@ -40,7 +45,9 @@ static int write_transfer(const char *path, int first, int last)
         int16_t s = (int16_t)(i >= lead && i < lead + ns ? buf[i - lead] * 26000 : 0); fwrite(&s, 2, 1, f);
     }
     fclose(f); free(buf);
-    fprintf(stderr, "%s: %d sounds, %.2f s of transfer\n", path, n, ns / (double)FS);
+    double total = (lead + ns + tail) / (double)FS;
+    fprintf(stderr, "%s: %d sounds, %.2f s of transfer, %.2f s in all%s\n", path, n, ns / (double)FS, total,
+            total > max_s ? " -- LONGER than the sample it is for" : "");
     return n;
 }
 
@@ -81,7 +88,7 @@ static int load_mtpreset(const char *path)
         po32_patch_params_t pp;
         if (po32_patch_parse_mtdrum_text(txt, o, &pp) != PO32_OK) { fprintf(stderr, "drum %d: not imported\n", d); continue; }
         const float *f = (const float *)&pp;
-        for (int k = 0; k < 21; k++) { float v = f[k] < 0 ? 0 : f[k] > 1 ? 1 : f[k]; patch[d - 1][k] = (uint16_t)(v * 65535 + 0.5f); }
+        for (int k = 0; k < 21; k++) { float v = f[k] < 0 ? 0 : f[k] > 1 ? 1 : f[k]; patch[d - 1][0][k] = (uint16_t)(v * 65535 + 0.5f); }
         have[d - 1] = 1; count++;
     }
     free(t); return count;
@@ -91,10 +98,11 @@ static int load_mtpreset(const char *path)
 static int got(const po32_packet_t *pk, void *u)
 {
     (void)u;
-    if (pk->tag_code == PO32_TAG_PATCH && pk->payload_len == 43 && (pk->payload[0] >> 4) == 1) {
+    int side = pk->payload_len == 43 ? pk->payload[0] >> 4 : 0;
+    if (pk->tag_code == PO32_TAG_PATCH && (side == 1 || side == 2)) {
         int i = pk->payload[0] & 15;
-        for (int k = 0; k < 21; k++) patch[i][k] = (uint16_t)(pk->payload[1 + 2 * k] | pk->payload[2 + 2 * k] << 8);
-        have[i] = 1; snprintf(name[i], sizeof name[i], "instrument %d", i + 1);
+        for (int k = 0; k < 21; k++) patch[i][side - 1][k] = (uint16_t)(pk->payload[1 + 2 * k] | pk->payload[2 + 2 * k] << 8);
+        have[i] |= side; snprintf(name[i], sizeof name[i], "instrument %d", i + 1);
     }
     return 0;
 }
@@ -110,7 +118,7 @@ static int load_transfer(const char *path)
     free(t); if (!f) return -1;
     po32_demodulator_t d; po32_demodulator_init(&d, FS);
     po32_demodulator_push(&d, f, n, got, 0); po32_demodulator_flush(&d, got, 0); free(f);
-    int c = 0; for (int i = 0; i < 16; i++) c += have[i]; return c;
+    int c = 0; for (int i = 0; i < 16; i++) c += have[i] & 1; return c;
 }
 
 int main(int argc, char **argv)
@@ -119,12 +127,13 @@ int main(int argc, char **argv)
     size_t l = strlen(argv[1]);
     if (l > 9 && !strcmp(argv[1] + l - 9, ".mtpreset")) {
         if (load_mtpreset(argv[1]) <= 0) { fprintf(stderr, "%s: no drums imported\n", argv[1]); return 1; }
-        if (write_transfer(argv[2], 0, 7) <= 0) return 1;
+        if (write_transfer(argv[2], 0, 7, 1, 6.0) <= 0) return 1;
     } else {
         if (load_transfer(argv[1]) <= 0) { fprintf(stderr, "%s: no patches decoded\n", argv[1]); return 1; }
-        char a[1024], b[1024]; snprintf(a, sizeof a, "%s_1-8.wav", argv[2]); snprintf(b, sizeof b, "%s_9-16.wav", argv[2]);
-        if (write_transfer(a, 0, 7) < 0 || write_transfer(b, 8, 15) < 0) return 1;
+        char a[1024], b[1024], k[1024];
+        snprintf(a, sizeof a, "%s_1-8.wav", argv[2]); snprintf(b, sizeof b, "%s_9-16.wav", argv[2]); snprintf(k, sizeof k, "%s_kit.wav", argv[2]);
+        if (write_transfer(k, 0, 15, 3, 12.0) < 0 || write_transfer(a, 0, 7, 1, 6.0) < 0 || write_transfer(b, 8, 15, 1, 6.0) < 0) return 1;
     }
-    for (int i = 0; i < 16; i++) if (have[i]) printf("po-32 %d  %s\n", i + 1, name[i]);
+    for (int i = 0; i < 16; i++) if (have[i] & 1) printf("po-32 %d  %s%s\n", i + 1, name[i], have[i] & 2 ? "  (morph)" : "");
     return 0;
 }

@@ -7,6 +7,7 @@
     "perc.c",
     "perc_dsp.c",
     "perc_xfer.c",
+    "perc_xbank.c",
     "perc_screen.c",
     "perc_draw.c"
   ],
