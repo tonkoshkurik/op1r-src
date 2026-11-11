@@ -80,7 +80,7 @@ extern volatile uint8_t op1_eng_page[4];
 extern volatile uint8_t op1_fx_page[3][4];
 void *read_fx_param_safe(int slot, int pos);
 int16_t op1_page2_live(int fx, int pos, int k, int16_t stored);
-int op1_patch_wait(void);
+int op1_patch_wait(void), op1_patch_idle(void);
 int  eu_fw_note_on(int pos, int note, int key, int vel);           /* seq/seq_core.c */
 void eu_fw_note_off(int midi);
 extern volatile uint8_t eu_rec_play;
@@ -125,7 +125,7 @@ static const struct { const char *name; void *addr; } exports[] = {
     { "read_fx_param_safe", (void *)read_fx_param_safe },
     { "op1_sc_source", (void *)op1_sc_source },
     { "op1_page2_live", (void *)op1_page2_live },
-    { "op1_patch_wait", (void *)op1_patch_wait },
+    { "op1_patch_wait", (void *)op1_patch_wait }, { "op1_patch_idle", (void *)op1_patch_idle },
     { "op1_sine_q", (void *)&op1_sine_q },
     { "op1_l1_claim", (void *)op1_l1_claim }, { "op1_l1_claim_state", (void *)op1_l1_claim_state },
     { "op1_l1_sine_quarter", (void *)op1_l1_sine_quarter },

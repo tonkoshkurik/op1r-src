@@ -269,8 +269,12 @@ int16_t op1_page2_live(int fx, int pos, int k, int16_t stored);
  * type job. */
 #ifndef OP1_HOST
 int op1_patch_wait(void);
+/* 1 when no patch job runs now (no waiting): for a writer that can come back later instead of blocking. From a thread
+ * above the BgFileWorker, a write right after a 1 cannot be overtaken by a new job (it does not preempt us). */
+int op1_patch_idle(void);
 #else
 static inline int op1_patch_wait(void) { return 0; }
+static inline int op1_patch_idle(void) { return 1; }
 #endif
 static inline const int16_t *op1_knobs_shown(int fx, int pos, const int16_t *w, int16_t *buf)
 {
