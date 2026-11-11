@@ -213,7 +213,7 @@ static void xfer_step(int slot)
         return;
     }
     if (xf_slot != slot) { xf_sig[xf_slot] = 0; xf_slot = -1; return; }
-    uint32_t n = xf_len - xf_pos; if (n > 8192) n = 8192;
+    uint32_t n = xf_len - xf_pos; if (n > 2048) n = 2048;   /* smaller chunk: the page stays smooth while decoding */
     BCU(22); perc_xfer_push(&xf_dec, xf_data + xf_pos, n); xf_pos += n; BCU(23);
     if (xf_dec.done || xf_pos >= xf_len) {
         int any = 0; for (int i = 0; i < PD_XFER; i++) any |= xf_dec.have[i] & 1;
@@ -366,8 +366,8 @@ static void pd_flush(void)
         if (!op1_patch_idle()) return;                        /* a save / type job runs: on the next turn or key */
         dirty_keys[slot] = 0;
         if (!claimed[slot]) continue;
-        BCU(31); kit_write(slot, k); BCU(32);
-        DRUM_TO_PATCH(DRUM_PATCH(slot));                      /* marks the patch changed: the delayed save writes it */
+        BCU(31); kit_write(slot, k); BCU(33);
+        DRUM_TO_PATCH(DRUM_PATCH(slot)); BCU(34);             /* marks the patch changed: the delayed save writes it */
     }
 }
 
@@ -475,9 +475,10 @@ static int pd_keyev(int code, int pressed)                    /* Shift + blue pr
     if (!pd_page() || code != 0x3B || !SHIFT_HELD) return 0;
     if (pressed) {
         int slot = DRUM_SLOT_CUR;
+        BCU(70);
         for (int i = 0; i < PD_XFER && i < PD_PADS; i++)
             if (xf_have[slot][i]) { pd_set_sound(slot, i, PERC_FACTORY_COUNT + i); dirty_keys[slot] |= 1u << i; }
-        pd_flush();                                           /* one write and one mark for the whole fill */
+        BCU(71); pd_flush(); BCU(72);                         /* one write and one mark for the whole fill */
     }
     return 1;
 }
@@ -518,6 +519,7 @@ static void pd_update(void *scr, int dt)
     v.blue2 = "sound";
     v.hit_seq = pd_hit_seq; v.hit_vel = pd_hit_vel;
     perc_draw_page(scr, dt, &v);
+    BCU(12);
 }
 static void pd_ui_build(void)
 {

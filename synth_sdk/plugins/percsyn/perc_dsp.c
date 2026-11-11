@@ -332,6 +332,10 @@ static int32_t distort(const perc_prep_t *p, int32_t s)
     return s < 0 ? -y : y;
 }
 
+/* hard voice-length cap: no perc voice outlives a real drum hit, whatever its envelopes say. A legit PO-32 patch can
+ * have a multi-second or sustained tail; six of those never ending peg the one DSP core and starve the UI (the device
+ * looks frozen). PERC_MAX_N samples (~6 s) is well past any drum hit and bounds the worst case. */
+#define PERC_MAX_N (PERC_RATE * 6u)
 int perc_render(perc_voice_t *v, int16_t *out, unsigned cnt, int32_t key_l2)
 {
     const perc_prep_t *p = &v->p;
@@ -434,6 +438,10 @@ int perc_render(perc_voice_t *v, int16_t *out, unsigned cnt, int32_t key_l2)
         (v->osc_env < 10737 || !p->osc_g) && (v->nenv < 10737 || p->nenv_mode == 1 || !p->noise_g)) {
         if (!p->use_eq || v->tail >= PERC_RATE * 3 / 20) v->active = 0;               /* the EQ rings out for 150 ms */
         else v->tail += cnt;
+    }
+    if (v->n >= PERC_MAX_N && v->active) {                                            /* hard cap: fade out and end */
+        for (j = 0; j < cnt; j++) out[j] = (int16_t)((int32_t)out[j] * (int32_t)(cnt - 1 - j) / (int32_t)cnt);
+        v->active = 0;
     }
     return 1;
 }
