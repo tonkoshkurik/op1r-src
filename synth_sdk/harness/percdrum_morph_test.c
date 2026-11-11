@@ -19,7 +19,7 @@ int main(void)
             assert(p[i] >= (want < 1 ? 0 : want - 1) && p[i] <= want + 1);
         }
     }
-    key_default(&k, 0); assert(!key_sided(&k) && k.morph == 0);
+    key_default(&k, 0); assert(key_sided(&k) && k.morph == 0);   /* built-ins have a right side */
     printf("morph lerp: ok (left at 0, right at full, within 1 word between)\n");
     return 0;
 }

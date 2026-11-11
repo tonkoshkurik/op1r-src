@@ -1,10 +1,13 @@
 #pragma GCC optimize ("no-tree-loop-distribute-patterns") /* no implicit libc calls */
 /* perc drum kit (plugin.json "kind": "drum", docs/43): a drum type next to drum, dbox and drum+. Each of the 24 keys
  * plays its own perc sound (a PO-32 patch: a built-in one, or one transferred into the kit's sample), with its own
- * pitch, length, punch, tone, drive, level and morph, saved with the kit:
- *   "op1r": {"engine": "perc", "perc": [[21 left patch words, pitch, length, punch, tone, drive, level, sound,
- *                                        morph, 21 right patch words], x 24]}
- * (kits from before morph have the first 28: right = left, morph 0).
+ * pitch, length, punch, tone, drive, level and morph, saved with the kit as one string (one JSON node, so a save is
+ * short):
+ *   "op1r": {"engine": "perc", "keys": "<24 keys x 50 words, 4 hex digits each>"}
+ *   a key: 21 left patch words, pitch, length, punch, tone, drive, level, sound, morph, 21 right patch words
+ * (kits from before: "perc": [[28 or 50 ints] x 24], read once and replaced; without a right side: right = left).
+ * Knob turns change the keys in memory; the JSON is written later, only while no patch job (save / type job) runs,
+ * from the key thread, never waiting (pd_flush).
  *
  * T1 page (the selected key, as the OP-1's drum pages):  blue pitch, green length, white punch, orange tone;
  * Shift + blue the sound (10 built-in, then po-32 1..16 from the kit's sample), Shift + green drive, Shift + white
@@ -78,7 +81,7 @@ static const int8_t def_map[PD_PADS][4] = {
 static void key_default(pd_key *k, int pad)
 {
     const int8_t *d = def_map[pad];
-    for (int i = 0; i < 21; i++) k->patch[i] = k->right[i] = PERC_FACTORY[d[0]][i];
+    for (int i = 0; i < 21; i++) { k->patch[i] = PERC_FACTORY[d[0]][i]; k->right[i] = PERC_FACTORY_R[d[0]][i]; }
     k->morph = 0;
     k->sound = (uint8_t)d[0];
     k->pitch = (int16_t)(16384 + d[1] * 683);                 /* 683 per semitone (+-24 over the knob) */
@@ -111,7 +114,8 @@ static void macros_of(const pd_key *k, perc_macro_t *m)
 
 /* ---- voices (audio interrupt) ---- */
 static perc_voice_t pv[PD_VOICES];
-static volatile uint8_t pv_on[PD_VOICES], pv_fade[PD_VOICES];
+static volatile uint8_t pv_on[PD_VOICES], pv_fade[PD_VOICES], pv_pending[PD_VOICES];
+static uint8_t pv_slot[PD_VOICES], pv_pad[PD_VOICES], pv_vel[PD_VOICES];
 static uint32_t pv_t[PD_VOICES], pv_clock;
 volatile uint32_t pd_hit_seq; volatile int32_t pd_hit_vel;
 
@@ -127,13 +131,10 @@ static void pd_note_on(void *self, const void *pad)
     m->state = ST_HELD; m->blocks = 0; m->pos = 0;
     if (v < 0) return;
     int p = VOICE_PAD[v]; if ((unsigned)p >= PD_PADS) p = 0;
-    const pd_key *k = &kit[slot][p];
-    perc_macro_t mc; macros_of(k, &mc);
     int vel = VOICE_VEL[v] >> 8;
-    uint16_t mp[21];
-    perc_prepare(&pv[v].p, key_patch(k, mp), &mc, vel);
-    perc_trigger(&pv[v]);
-    pv[v].prev = 0; pv_fade[v] = 0; pv_on[v] = 1; pv_t[v] = ++pv_clock;
+    pv_slot[v] = (uint8_t)slot; pv_pad[v] = (uint8_t)p; pv_vel[v] = (uint8_t)vel;
+    pv_fade[v] = 0; pv_t[v] = ++pv_clock; pv_on[v] = 1;
+    pv_pending[v] = 1;                                        /* set up in render: one context builds the voice */
     int n = 0, oldest = -1;                                   /* at most PD_SYNTH: the oldest other fades out */
     for (int i = 0; i < PD_VOICES; i++) if (pv_on[i] && !pv_fade[i]) { n++; if (i != v && (oldest < 0 || pv_t[i] < pv_t[oldest])) oldest = i; }
     if (n > PD_SYNTH && oldest >= 0) pv_fade[oldest] = 1;
@@ -148,6 +149,15 @@ static void pd_render(void *self, int16_t *out, const void *pad)
     stock_voice *m = model(self);
     m->blocks++;
     if (v < 0 || !pv_on[v]) { for (j = 0; j < 128; j++) out[j] = 0; m->state = ST_OFF; return; }
+    if (pv_pending[v]) {
+        pv_pending[v] = 0;
+        const pd_key *k = &kit[pv_slot[v]][pv_pad[v]];
+        perc_macro_t mc; macros_of(k, &mc);
+        static uint16_t mp[21];                               /* audio context only */
+        perc_prepare(&pv[v].p, key_patch(k, mp), &mc, pv_vel[v]);
+        perc_trigger(&pv[v]);
+        pv[v].prev = 0;
+    }
     int16_t half[64];
     int alive = perc_render(&pv[v], half, 64, 0);              /* pitch: the key's own (the stock pitch word is not used) */
     int32_t prev = pv[v].prev;
@@ -209,10 +219,10 @@ static void xfer_step(int slot)
     }
 }
 #endif
-/* the sound list: 0..9 built-in (one side), 10.. po-32 n of this kit's transfer (0 if that one is absent) */
+/* the sound list: 0..9 built-in, 10.. po-32 n of this kit's transfer (0 if that one is absent); side 0 left, 1 right */
 static const uint16_t *sound_patch(int slot, int s, int side)
 {
-    if (s < PERC_FACTORY_COUNT) return PERC_FACTORY[s];
+    if (s < PERC_FACTORY_COUNT) return side ? PERC_FACTORY_R[s] : PERC_FACTORY[s];
     s -= PERC_FACTORY_COUNT;
     return s < PD_XFER && xf_have[slot][s] ? xf_patch[slot][s][side] : 0;
 }
@@ -244,40 +254,86 @@ static int32_t key_put(const pd_key *k, int f)
     return f < 21 ? k->patch[f] : f < 27 ? (&k->pitch)[f - 21] : f == 27 ? k->sound : f == 28 ? k->morph : k->right[f - 29];
 }
 
+/* a built-in key saved before the built-ins had a right side: give it the right side */
+static void key_fix_right(pd_key *k)
+{
+    if (k->sound >= PERC_FACTORY_COUNT) return;
+    for (int i = 0; i < 21; i++) if (k->patch[i] != PERC_FACTORY[k->sound][i] || k->right[i] != k->patch[i]) return;
+    for (int i = 0; i < 21; i++) k->right[i] = PERC_FACTORY_R[k->sound][i];
+}
+static int hexv(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; }
+#define PD_HEX (PD_PADS * PD_NF * 4)
+static char hexbuf[PD_HEX + 1];
+
 static void pd_slot_loaded(int slot, void *op1r)
 {
     if ((unsigned)slot >= PD_SLOTS) return;
     if (!ours(op1r)) { claimed[slot] = 0; return; }
     for (int p = 0; p < PD_PADS; p++) key_default(&kit[slot][p], p);
-    const void *a = JV_CGET(op1r, "perc");
-    if (a && jv_type(a) == JV_ARRAY) {
-        void *arr = JV_KEY(op1r, "perc");
-        unsigned n = JV_SIZE(arr);
-        for (unsigned p = 0; p < n && p < PD_PADS; p++) {
-            void *e = JV_IDX(arr, p);
-            unsigned m = jv_type(e) == JV_ARRAY ? JV_SIZE(e) : 0;
-            if (m < PD_NF_OLD) continue;
-            if (m > PD_NF) m = PD_NF;
-            pd_key *k = &kit[slot][p];
-            for (unsigned f = 0; f < m; f++) key_get(k, (int)f, jv_int(JV_IDX(e, f)));
-            if (m < PD_NF) { k->morph = 0; for (int i = 0; i < 21; i++) k->right[i] = k->patch[i]; }   /* from before morph */
+    const void *h = JV_CGET(op1r, "keys");
+    const char *t = h && jv_type(h) == JV_STRING ? *(const char *const *)h : 0;
+    unsigned tl = 0; if (t) while (tl <= PD_HEX && t[tl]) tl++;
+    if (tl == PD_HEX) {                                       /* "keys": the hex string */
+        for (int p = 0; p < PD_PADS; p++) {
+            pd_key k = kit[slot][p]; int ok = 1;
+            for (int f = 0; f < PD_NF && ok; f++) {
+                const char *c = t + (p * PD_NF + f) * 4; int32_t x = 0;
+                for (int d = 0; d < 4; d++) { int n = hexv(c[d]); if (n < 0) { ok = 0; break; } x = x << 4 | n; }
+                key_get(&k, f, x);
+            }
+            if (ok) { key_fix_right(&k); kit[slot][p] = k; }
+        }
+    } else {                                                  /* "perc": the arrays of earlier builds */
+        const void *a = JV_CGET(op1r, "perc");
+        if (a && jv_type(a) == JV_ARRAY) {
+            void *arr = JV_KEY(op1r, "perc");
+            unsigned n = JV_SIZE(arr);
+            for (unsigned p = 0; p < n && p < PD_PADS; p++) {
+                void *e = JV_IDX(arr, p);
+                unsigned m = jv_type(e) == JV_ARRAY ? JV_SIZE(e) : 0;
+                if (m < PD_NF_OLD) continue;
+                if (m > PD_NF) m = PD_NF;
+                pd_key *k = &kit[slot][p];
+                for (unsigned f = 0; f < m; f++) key_get(k, (int)f, jv_int(JV_IDX(e, f)));
+                if (m < PD_NF) { k->morph = 0; for (int i = 0; i < 21; i++) k->right[i] = k->patch[i]; }
+                key_fix_right(k);
+            }
         }
     }
     claimed[slot] = 1;
 }
-static void key_store_f(int slot, int pad, int f0, int f1)   /* op1r.perc[pad][f0..f1) (UI thread, patch idle) */
+/* the slot's keys -> op1r.keys (and the old "perc" arrays out). Only while no patch job serializes the patch: from
+ * inside a type job, or after op1_patch_idle() on a thread above the BgFileWorker. */
+static void kit_write(int slot)
 {
     void *json = (uint8_t *)DRUM_PATCH(slot) + 4;
     void *op = JV_KEY(json, "op1r");
     if (!ours(op)) return;
-    void *arr = JV_KEY(op, "perc");
-    if (jv_type(arr) != JV_ARRAY && jv_type(arr) != JV_NULL) return;
-    void *e = JV_IDX(arr, (unsigned)pad);
+    static const char hx[] = "0123456789abcdef";
+    char *c = hexbuf;
+    for (int p = 0; p < PD_PADS; p++) for (int f = 0; f < PD_NF; f++) {
+        uint32_t x = (uint32_t)key_put(&kit[slot][p], f) & 0xffffu;
+        c[0] = hx[x >> 12]; c[1] = hx[(x >> 8) & 15]; c[2] = hx[(x >> 4) & 15]; c[3] = hx[x & 15]; c += 4;
+    }
+    *c = 0;
     uint32_t tmp[4];
-    if (jv_type(e) != JV_ARRAY || JV_SIZE(e) < PD_NF) f0 = 0, f1 = PD_NF;   /* new or from before morph: the whole row */
-    for (int f = f0; f < f1; f++) { JV_FROM_INT(tmp, key_put(&kit[slot][pad], f)); JV_ASSIGN(JV_IDX(e, (unsigned)f), tmp); JV_DTOR(tmp, 2); }
+    JV_FROM_STR(tmp, hexbuf); JV_ASSIGN(JV_KEY(op, "keys"), tmp); JV_DTOR(tmp, 2);
+    if (JV_CGET(op, "perc")) { JV_REMOVE(op, tmp, "perc"); JV_DTOR(tmp, 2); }
 }
-static void key_store(int slot, int pad) { key_store_f(slot, pad, 0, PD_NF); }
+static volatile uint8_t dirty;                                /* slots whose keys changed since kit_write */
+/* from the key thread only (knob turns, key events via pd_sync; the stock pad writes run there too), never waits:
+ * while a patch job runs the slot stays dirty for the next turn or key */
+static void pd_flush(void)
+{
+    while (dirty) {
+        if (!op1_patch_idle()) return;                        /* a save / type job runs: next frame */
+        int slot = 0; while (!(dirty >> slot & 1)) slot++;
+        dirty &= (uint8_t)~(1u << slot);
+        if (!claimed[slot]) continue;
+        kit_write(slot);
+        DRUM_TO_PATCH(DRUM_PATCH(slot));                      /* marks the patch changed: the delayed save writes it */
+    }
+}
 
 /* type job: our row -> claim the sampled kit (fresh keys); another selection -> let go, then the stock job */
 static void pd_type_job(void *job)
@@ -295,11 +351,10 @@ static void pd_type_job(void *job)
     }
     if (!jv_is_str(JV_KEY(json, "type"), "drum")) return;     /* dbox: not a sampled kit */
     void *op = JV_KEY(json, "op1r");                          /* null -> object on the first key */
-    const void *had = jv_type(op) == JV_OBJECT ? JV_CGET(op, "perc") : 0;   /* a perc kit from before (re-picked) */
-    int keep = had && jv_type(had) == JV_ARRAY;
     JV_FROM_STR(tmp, "perc"); JV_ASSIGN(JV_KEY(op, "engine"), tmp); JV_DTOR(tmp, 2);
-    pd_slot_loaded(slot, op);                                 /* its keys (defaults where missing); claims the slot */
-    if (!keep) for (int p = 0; p < PD_PADS; p++) key_store(slot, p);
+    pd_slot_loaded(slot, op);                                 /* its keys (a perc kit from before keeps them; else fresh) */
+    kit_write(slot);                                          /* inside the job: no patch job can overlap */
+    dirty &= (uint8_t)~(1u << slot);
     UI_SLOT(slot);
     UI_SIGNAL();
     struct { uint32_t vt; uint8_t drum, pad[3]; int32_t slot; } save = { 0, 1, { 0, 0, 0 }, slot };
@@ -325,16 +380,17 @@ static void *pd_screen_for(int id)
 }
 static void pd_sync(int editor_open_on_10)
 {
+    pd_flush();                                               /* (inside a type job: not idle, so later) */
     if (!pd_ready) return;
     if (!editor_open_on_10) SCREEN_TABLE[0x10] = pd_screen_for(0x10);
     SCREEN_TABLE[0x17] = pd_screen_for(0x17);
 }
 static int pd_page(void) { return pd_ready && pd_slot_ours() && CURRENT_SCREEN == 0x10 && SCREEN_TABLE[0x10] == (void *)pd_obj; }
-static void pd_changed(int slot, int pad, int f0, int f1)    /* fields f0..f1 of the key changed */
+static void pd_changed(int slot, int pad, int f0, int f1)    /* the key changed: written by pd_flush */
 {
-    op1_patch_wait();                                         /* not while a save / type job serializes the patch */
-    key_store_f(slot, pad, f0, f1);
-    DRUM_TO_PATCH(DRUM_PATCH(slot));                          /* marks the patch changed: the stock saver writes it */
+    (void)pad; (void)f0; (void)f1;
+    dirty |= (uint8_t)(1u << slot);
+    pd_flush();
 }
 static int pd_sound_count(int slot) { int n = PERC_FACTORY_COUNT; for (int i = 0; i < PD_XFER; i++) if (xf_have[slot][i]) n = PERC_FACTORY_COUNT + i + 1; return n; }
 static void pd_set_sound(int slot, int pad, int s)           /* both sides; the key's morph stays */
