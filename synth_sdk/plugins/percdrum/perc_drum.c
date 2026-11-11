@@ -39,6 +39,7 @@
 #define LAST_PAD        (*(volatile int *)0xFF801044)
 #define SHIFT_HELD      (*(volatile uint8_t *)0x01DD7F78)
 #define KEY_DISPATCH    ((void (*)(int, int))0x019B6C74)      /* the stock key dispatch (dispatcher.c) */
+#define MODE_ID         (*(volatile int *)0xFF907D58)         /* ModeSwitcher: 0 synth, 1 drum, 2 tape, 3 mixer */
 #define DRUM_TO_PATCH   ((void (*)(void *))0x019FFC50)
 #define DRUM_PATCH(s)   ((void *)(0x01DDD9A8 + (s) * 0x38))
 #define DRUM_SAMPLER(s) (((uint32_t **)0x01CC10CC)[s])        /* DrumSampler of slot s: [0] = SampleBuffer */
@@ -853,7 +854,7 @@ static int pd_is_plus(int slot) { return (unsigned)slot < PD_SLOTS && claimed[sl
 #define ITER_SCREEN_VT  ((const uint32_t *)0x019103FC)
 static uint32_t pd_obj[2][32], pd_vt[10];
 static void *pd_stock[2];
-static uint8_t pd_ready, pd_mix, pd_t4_down;
+static uint8_t pd_ready, pd_mix, pd_t4_down, pd_editor;
 static int32_t pd_acc[4];
 static int pd_slot_ours(void) { return DRUM_MODE && claimed[DRUM_SLOT_CUR]; }
 static void *pd_screen_for(int id)
@@ -865,6 +866,7 @@ static void *pd_screen_for(int id)
 static void pd_sync(int editor_open_on_10)
 {
     pd_flush();                                               /* (inside a type job: not idle, so later) */
+    pd_editor = (uint8_t)editor_open_on_10;
     if (!pd_ready) return;
     if (!editor_open_on_10) SCREEN_TABLE[0x10] = pd_screen_for(0x10);
     SCREEN_TABLE[0x17] = pd_screen_for(0x17);
@@ -893,16 +895,20 @@ static int pd_knob(int knob, int delta)
     if (ui_turn(slot, pad, page, SHIFT_HELD, knob, st)) pd_changed(slot, pad);
     return 1;
 }
-/* keys on our pages: the encoder presses; T4 (the LFO page does nothing for a perc kit) shows the mix page on the T1
- * screen, T1 the tone page again. Shift + T-keys and T3 stay stock. */
+/* keys: the encoder presses on our pages; T4 anywhere in drum mode on a perc kit (from T1, T2, the FX page, or the LFO
+ * page the mode came back to: the LFO does nothing for a perc kit) shows the mix page on the T1 screen, T1 the tone page
+ * again. Shift + T-keys and T3 stay stock. */
 static int pd_keyev(int code, int pressed)
 {
     if (code == 0x09) {
         if (!pressed) { int r = pd_t4_down; pd_t4_down = 0; return r; }
         int page = pd_page();
-        if (page < 0 || SHIFT_HELD) return 0;
+        if (SHIFT_HELD || pd_editor || !pd_ready || !pd_slot_ours() || (page < 0 && MODE_ID != 1)) return 0;
         pd_mix = 1; pd_t4_down = 1;
-        if (page == PG_NOISE) { KEY_DISPATCH(0x06, 1); KEY_DISPATCH(0x06, 0); }   /* to the T1 screen */
+        if (page != PG_TONE && page != PG_MIX) {              /* to the T1 screen, as a stock T1 press */
+            KEY_DISPATCH(0x06, 1); KEY_DISPATCH(0x06, 0);
+            SCREEN_TABLE[0x10] = pd_screen_for(0x10);
+        }
         return 1;
     }
     if (code == 0x06 && pressed && !SHIFT_HELD) { pd_mix = 0; return 0; }
