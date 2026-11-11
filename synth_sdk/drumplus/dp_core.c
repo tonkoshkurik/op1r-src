@@ -173,6 +173,7 @@ int dp_browser_id(int slot, uint8_t *found)
     return id;
 }
 void pj_begin(void), pj_end(void);                                /* patchjob.c: a patch job runs (docs/66) */
+void dpu_sync_auto(void);                                         /* dispatcher.c: the drum pages for the shown slot */
 /* job +4 slot, +8 selection (<= 0 a kit, 1 dbox, >= 2 a plugin's row). A plugin row goes to that plugin (it claims the
  * kit; the others are told so they let go); any other selection to the slot's plugin (it lets go and runs the stock
  * job), else to drum+ as before; a plugin row whose plugin is not loaded does nothing (the stock job has no such row). */
@@ -188,6 +189,7 @@ void dp_type_job(void *job)
             for (int i = 0; i < op1_drum_n; i++)
                 if (op1_drums[i] != to) op1_drums[i]->slot_loaded(slot, (void *)op);
         }
+        dpu_sync_auto();                                      /* the pages again, now that only the new owner claims it */
     } else if (sel < 2) {
         const op1_drum_t *d = (uint32_t)slot < DP_SLOTS ? drum_for_slot(slot) : op1_drum;
         if (d) d->type_job(job); else TYPE_JOB(job);

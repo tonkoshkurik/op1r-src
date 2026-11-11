@@ -30,7 +30,6 @@
 #define VOICE_PAD  ((const int32_t *)0xFF801334)              /* pad of voice v */
 #define VOICE_VEL  ((const int16_t *)0xFF8012EC)              /* velocity << 8 of voice v */
 #define DRUM_SLOT  (*(const volatile int32_t *)0x01AAAC10)    /* the playing drum slot */
-#define BUF_INC    ((const int32_t *)0xFF801950)              /* per-sample step << 17 (1/2048 sample; 1024 = as recorded) */
 #define SCREEN_TABLE    ((void **)0x01DF4E54)
 #define CURRENT_SCREEN  (*(volatile int *)0x018B65C8)
 #define DRUM_MODE       (*(volatile int *)0x01DE4C40 == 1)
@@ -133,9 +132,7 @@ static void pd_render(void *self, int16_t *out, const void *pad)
     m->blocks++;
     if (v < 0 || !pv_on[v]) { for (j = 0; j < 128; j++) out[j] = 0; m->state = ST_OFF; return; }
     int16_t half[64];
-    int32_t step = BUF_INC[0] >> 17;                          /* the key's stock pitch: 1024 = as recorded */
-    int32_t key = step > 0 ? perc_log2((uint32_t)step) - (10 << 16) : 0;
-    int alive = perc_render(&pv[v], half, 64, key);
+    int alive = perc_render(&pv[v], half, 64, 0);              /* pitch: the key's own (the stock pitch word is not used) */
     int32_t prev = pv[v].prev;
     for (j = 0; j < 64; j++) { int32_t c = half[j]; out[2 * j] = (int16_t)((prev + c) >> 1); out[2 * j + 1] = (int16_t)c; prev = c; }
     pv[v].prev = prev;
@@ -266,11 +263,11 @@ static void pd_type_job(void *job)
     }
     if (!jv_is_str(JV_KEY(json, "type"), "drum")) return;     /* dbox: not a sampled kit */
     void *op = JV_KEY(json, "op1r");                          /* null -> object on the first key */
+    const void *had = jv_type(op) == JV_OBJECT ? JV_CGET(op, "perc") : 0;   /* a perc kit from before (re-picked) */
+    int keep = had && jv_type(had) == JV_ARRAY;
     JV_FROM_STR(tmp, "perc"); JV_ASSIGN(JV_KEY(op, "engine"), tmp); JV_DTOR(tmp, 2);
-    for (int p = 0; p < PD_PADS; p++) key_default(&kit[slot][p], p);
-    claimed[slot] = 1;
-    for (int p = 0; p < PD_PADS; p++) key_store(slot, p);
-    dpu_sync_auto();
+    pd_slot_loaded(slot, op);                                 /* its keys (defaults where missing); claims the slot */
+    if (!keep) for (int p = 0; p < PD_PADS; p++) key_store(slot, p);
     UI_SLOT(slot);
     UI_SIGNAL();
     struct { uint32_t vt; uint8_t drum, pad[3]; int32_t slot; } save = { 0, 1, { 0, 0, 0 }, slot };

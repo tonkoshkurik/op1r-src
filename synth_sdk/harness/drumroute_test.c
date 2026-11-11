@@ -31,6 +31,8 @@ static const void *h_cget(const void *json, const char *k) { (void)k; int s = (i
 void sp_slot_loaded(int slot, void *op1r) { (void)slot; (void)op1r; }
 void patch_repair(void *json) { (void)json; }
 void pj_begin(void) {} void pj_end(void) {}
+void dpu_sync(int editor_open_on_10);
+void dpu_sync_auto(void) { logs("auto:"); dpu_sync(0); }
 #include "../drumplus/dp_core.c"
 volatile uint32_t sm_cy[SMC_N];
 
@@ -60,6 +62,7 @@ static int checks;
 static void expect(const char *what) { if (strcmp(h_log, what)) { printf("FAIL\n  got  [%s]\n  want [%s]\n", h_log, what); assert(0); } h_log[0] = 0; checks++; }
 static void job(int slot, int sel) { int32_t j[3] = { 0, slot, sel }; dp_type_job(j); }
 
+static int drum_claim_sync;
 int main(void)
 {
     static int16_t out[128]; char v[12][4];
@@ -69,7 +72,7 @@ int main(void)
     h_drum_slot = 0;
     dp_fw_note_on(v[0], 0); dp_fw_render(v[0], out, 0); dp_fw_note_off(v[0], 0);
     expect("dplus.on dplus.render dplus.off ");                      /* stock kit: drum+ is called (plays stock) */
-    job(0, 2); expect("dplus.job ");                                 /* claim */
+    job(0, 2); expect("dplus.job auto: dplus.sync(own) ");                                 /* claim */
     assert(dplus_is(0));
     uint8_t found; (void)found;
     dp_fw_note_on(v[1], 0); dp_fw_render(v[1], out, 0); expect("dplus.on dplus.render ");
@@ -80,7 +83,8 @@ int main(void)
     assert(dpu_knob(0, 1) == 0); expect("dplus.knob ");
     /* ---- 2. drum+ and perc ---- */
     op1_drums[1] = &perc; op1_drum_rows[1] = 3; op1_drum_n = 2;
-    job(1, 3); expect("perc.job dplus.loaded ");                      /* perc claims slot 1; drum+ is told */
+    h_ui_slot = 1; drum_claim_sync = 1;
+    job(1, 3); expect("perc.job dplus.loaded auto: dplus.sync(stock) perc.sync(own) ");   /* perc claims slot 1; drum+ is told; its page */
     assert(perc_is(1) && !dplus_is(1));
     h_drum_slot = 1;
     dp_fw_note_on(v[2], 0); dp_fw_render(v[2], out, 0); expect("perc.on perc.render ");
@@ -92,9 +96,9 @@ int main(void)
     assert(dpu_knob(0, 1) == 1); expect("perc.knob ");
     assert(dpu_key(0x3B, 1) == 1); expect("perc.key ");
     h_ui_slot = 0; dpu_sync(0); expect("perc.sync(stock) dplus.sync(stock) ");
-    job(1, 2); expect("dplus.job perc.loaded ");                      /* perc kit -> drum+ */
+    h_ui_slot = 1; job(1, 2); expect("dplus.job perc.loaded auto: perc.sync(stock) dplus.sync(own) ");   /* perc kit -> drum+: drum+'s page */
     assert(dplus_is(1) && !perc_is(1));
-    job(1, 3); expect("perc.job dplus.loaded ");                      /* back to perc */
+    job(1, 3); expect("perc.job dplus.loaded auto: dplus.sync(stock) perc.sync(own) ");   /* back to perc */
     job(1, 1); expect("stock.job perc.job ");                         /* perc kit -> dbox: perc lets go */
     assert(!perc_is(1) && !dplus_is(1));
     job(1, 4); expect("");                                           /* row 4: nobody */
@@ -103,7 +107,7 @@ int main(void)
     h_drum_slot = 2;
     dp_fw_note_on(v[3], 0); dp_fw_render(v[3], out, 0); expect("stock.on stock.render ");
     job(2, 2); expect("");                                           /* drum+ row, drum+ absent: nothing */
-    job(2, 3); expect("perc.job ");
+    h_ui_slot = 2; job(2, 3); expect("perc.job auto: perc.sync(own) ");
     dp_fw_note_on(v[3], 0); expect("perc.on ");
     printf("drum routing: %d checks ok\n", checks);
     return 0;
