@@ -216,7 +216,7 @@ static void xfer_step(int slot)
     if (xf_slot != slot) { xf_sig[xf_slot] = 0; xf_slot = -1; return; }
     uint32_t n = xf_len - xf_pos; if (n > 2048) n = 2048;   /* smaller chunk: the page stays smooth while decoding */
     BCU(22); perc_xfer_push(&xf_dec, xf_data + xf_pos, n); xf_pos += n; BCU(23);
-    if (xf_dec.done || xf_pos >= xf_len) {
+    if (xf_pos >= xf_len) {   /* the whole sample: all transfers in it */
         int any = 0; for (int i = 0; i < PD_XFER; i++) any |= xf_dec.have[i] & 1;
         if (any) for (int i = 0; i < PD_XFER; i++) {
             xf_have[slot][i] = xf_dec.have[i] & 1;

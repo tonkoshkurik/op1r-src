@@ -86,6 +86,6 @@ void perc_xfer_service(void)
     uint32_t n = dec_len - dec_pos; if (n > 8192) n = 8192;
     perc_xfer_push(&dec, dec_data + dec_pos, n);
     dec_pos += n;
-    if (dec.done || dec_pos >= dec_len) { take(slot, &dec); dec_slot = -1; }
+    if (dec_pos >= dec_len) { take(slot, &dec); dec_slot = -1; }   /* whole sample: all transfers */
 }
 #endif

@@ -102,7 +102,7 @@ static void boundary(perc_xfer_t *x)
         if (!x->synced) {
             x->win_lo = (x->win_lo >> 1) | (x->win_hi << 31);
             x->win_hi = (x->win_hi >> 1) | (bit << 31);
-            if (x->win_lo == SYNC_LO && x->win_hi == SYNC_HI && !x->done) {
+            if (x->win_lo == SYNC_LO && x->win_hi == SYNC_HI) {   /* re-syncs for a further transfer in one recording */
                 x->synced = 1; x->crc = 0x1D0F; x->cur = 0; x->bits = 0; x->work_len = 0;
             }
         } else {
@@ -115,7 +115,7 @@ static void boundary(perc_xfer_t *x)
 
 void perc_xfer_push(perc_xfer_t *x, const int16_t *s, unsigned n)
 {
-    for (unsigned i = 0; i < n && !x->done; i++) {
+    for (unsigned i = 0; i < n; i++) {                           /* the whole recording: several transfers accumulate */
         x->car += CAR_INC;
         int32_t sn = OP1_SINE_Q[(x->car >> 19) & 8191], cs = OP1_SINE_Q[((x->car >> 19) + 2048) & 8191];
         x->ai += (s[i] * sn) >> 8;
