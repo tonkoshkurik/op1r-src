@@ -15,6 +15,8 @@
 
 static perc_voice_t voices[OP1_VOICES];
 static volatile uint8_t pending[OP1_VOICES];
+volatile uint32_t perc_hit_seq;
+volatile int32_t perc_hit_vel;
 
 /* the type word (Shift + blue, PERC_TYPES detents) -> sound */
 int perc_type_of(const int16_t *params) { int w = params[5] > 0 ? params[5] : 0; return (w * PERC_TYPES) >> 15; }
@@ -56,6 +58,7 @@ static void v_render(void *self, int16_t *out, const int16_t *params)
             perc_macro_t m; macros(&m, params);
             perc_prepare(&v->p, patch, &m, OP1_VOICE_VEL[i] >> 8);
             perc_trigger(v);
+            perc_hit_vel = op1_voice_vel_gain(self); perc_hit_seq++;
         } else v->active = 0;
         v->prev = 0;
     }

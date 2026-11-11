@@ -9,4 +9,7 @@ const uint16_t *perc_patch_of(int type);         /* 0: empty transfer slot */
 /* transfer (perc_xfer.c): patches decoded from the current slot's sample */
 const uint16_t *perc_xfer_patch(int instrument);
 void perc_xfer_service(void);
+/* for the screen: bumped on every hit, with that hit's velocity (Q15) */
+extern volatile uint32_t perc_hit_seq;
+extern volatile int32_t perc_hit_vel;
 #endif

@@ -13,7 +13,7 @@
 #include <string.h>
 
 int16_t host_sine[8192]; int32_t host_pitch_inc[128]; uint8_t host_voice_mem[6 * 0x24]; int16_t host_voice_vel[6];
-int16_t host_voice_env[128]; int16_t host_knobs[8][8]; int host_shift;
+int16_t host_voice_env[128]; int16_t host_knobs[8][8]; int host_shift; int host_slot;
 
 #define FS 44100
 #define LEN (FS * 3)

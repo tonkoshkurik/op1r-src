@@ -6,7 +6,8 @@
   "sources": [
     "perc.c",
     "perc_dsp.c",
-    "perc_xfer.c"
+    "perc_xfer.c",
+    "perc_screen.c"
   ],
   "defaults": [
     16384,
@@ -15,5 +16,9 @@
     16384
   ],
   "uses_sample": true,
-  "engine_ext": true
+  "engine_ext": true,
+  "screen": {
+    "svg": "perc.svg",
+    "symbol": "SCREEN_perc"
+  }
 }
