@@ -282,14 +282,15 @@ void perc_prepare(perc_prep_t *o, const uint16_t *pw, const perc_macro_t *m, int
 
 /* per-sample decay c -> per control step c^PERC_CR */
 static int32_t pow_cr(int32_t c) { int32_t c2 = mul30(c, c); return mul30(c2, c2); }
+/* a per-sample step x PERC_CR, at most 2^30 (a ramp that short is over within one control step) */
+static int32_t sat_cr(int32_t x) { return x >= ONE30 / PERC_CR ? ONE30 : x * PERC_CR; }
 static void to_control_rate(perc_prep_t *o)
 {
     o->osc_dcy_c = pow_cr(o->osc_dcy_c); o->n_dcy_c = pow_cr(o->n_dcy_c);
     if (o->mod_mode == 0) o->mod_dcy_c = pow_cr(o->mod_dcy_c);
-    if (o->mod_mode == 2) o->mod_alpha = ONE30 - pow_cr(ONE30 - o->mod_alpha);
-    o->osc_atk_step *= PERC_CR; o->n_atk_step *= PERC_CR;
-    o->lin_up *= PERC_CR; o->lin_dn *= PERC_CR;
-    o->ring_inc *= PERC_CR; o->mod_inc *= PERC_CR;
+    o->osc_atk_step = sat_cr(o->osc_atk_step); o->n_atk_step = sat_cr(o->n_atk_step);
+    o->lin_up = sat_cr(o->lin_up); o->lin_dn = sat_cr(o->lin_dn);
+    o->ring_inc *= PERC_CR; o->mod_inc *= PERC_CR;          /* noise pitch modulation stays per sample */
 }
 
 void perc_trigger(perc_voice_t *v)
@@ -301,7 +302,7 @@ void perc_trigger(perc_voice_t *v)
     v->mod_env = ONE30; v->mod_state = 0;
     if (p->mod_mode == 2) { v->rnd = v->rnd * 1103515245u + 12345u; v->mod_state = (int32_t)(v->rnd & 0x7fffffffu) - ONE30; }
     v->f1 = v->f2 = v->e1 = v->e2 = 0;
-    v->ao = v->an = 0; v->osync = v->nsync = 0; v->ramp = 0;
+    v->ao = v->an = 0; v->osync = v->nsync = 0; v->ramp = 0; v->tail = 0;
     v->active = 1;
 }
 
@@ -345,21 +346,16 @@ int perc_render(perc_voice_t *v, int16_t *out, unsigned cnt, int32_t key_l2)
         if (n < p->osc_atk_n) { oe = (int32_t)perc_pow2(v->osc_lg >> 8, 30); v->osc_lg += p->osc_atk_step; }
         else { if (!v->osync) { v->osc_env = ONE30; v->osync = 1; } oe = v->osc_env; v->osc_env = mul30(v->osc_env, p->osc_dcy_c); }
         uint32_t inc = inc0;                                                              /* pitch */
-        if (p->mod_on) {
+        if (p->mod_on && p->mod_mode < 2) {                                               /* decay sweep, sine */
             int32_t md;
             if (p->mod_mode == 0) { md = v->mod_env; v->mod_env = mul30(v->mod_env, p->mod_dcy_c); }
-            else if (p->mod_mode == 1) { md = cos_q30(v->mod_phase); v->mod_phase += p->mod_inc; }
-            else {
-                v->rnd = v->rnd * 1103515245u + 12345u;
-                int32_t r = (int32_t)(v->rnd & 0x7fffffffu) - ONE30;
-                v->mod_state += mul30(p->mod_alpha, r - v->mod_state);
-                md = v->mod_state;
-            }
+            else { md = cos_q30(v->mod_phase); v->mod_phase += p->mod_inc; }
             inc = perc_pow2(base_l2 + mul30(md, p->mod_scale), 0);
         }
+        const int fast_mod = p->mod_on && p->mod_mode == 2;                              /* noise: per sample */
         int32_t ne;                                                                       /* noise envelope, Q26 */
         if (p->nenv_mode == 1) {
-            if (n < p->lin_atk_n) { ne = v->lin >> 4; v->lin += p->lin_up; }
+            if (n < p->lin_atk_n) { ne = v->lin >> 4; v->lin = v->lin > ONE30 - p->lin_up ? ONE30 : v->lin + p->lin_up; }
             else if (n < p->lin_end_n) { if (!v->nsync) { v->lin = ONE30; v->nsync = 1; } ne = v->lin >> 4; v->lin -= p->lin_dn; if (v->lin < 0) v->lin = 0; }
             else ne = 0;
         } else if (n < p->n_atk_n) {
@@ -378,7 +374,7 @@ int perc_render(perc_voice_t *v, int16_t *out, unsigned cnt, int32_t key_l2)
         int32_t ao = mul30(oe, p->osc_g), an = mul30(ne, p->noise_g);
         if (!v->ramp) { v->ao = ao; v->an = an; v->ramp = 1; }
         int32_t go = v->ao, gn = v->an;
-        const int32_t dgo = (ao - go) / PERC_CR, dgn = (an - gn) / PERC_CR;
+        const int32_t dgo = (int32_t)(((int64_t)ao - go) / PERC_CR), dgn = (int32_t)(((int64_t)an - gn) / PERC_CR);
         v->ao = ao; v->an = an;
 
         /* ---- samples ---- */
@@ -388,6 +384,12 @@ int perc_render(perc_voice_t *v, int16_t *out, unsigned cnt, int32_t key_l2)
         for (j = 0; j < PERC_CR; j++) {
             go += dgo; gn += dgn;
             int32_t s = 0;
+            if (fast_mod) {                                                               /* as libpo32: the modulation's
+                                                                                             random number before the noise's */
+                rnd = rnd * 1103515245u + 12345u;
+                v->mod_state += mul30(p->mod_alpha, (int32_t)(rnd & 0x7fffffffu) - ONE30 - v->mod_state);
+                inc = perc_pow2(base_l2 + mul30(v->mod_state, p->mod_scale), 0);
+            }
             if (go) {
                 ph += inc;
                 int32_t w;                                                                /* Q15 */
@@ -427,10 +429,11 @@ int perc_render(perc_voice_t *v, int16_t *out, unsigned cnt, int32_t key_l2)
         }
         v->phase = ph; v->rnd = rnd; v->f1 = f1; v->f2 = f2;
     }
-    /* ended: both envelopes below -100 dB after their attacks, filters rung out */
+    /* ended: both envelopes below -100 dB after their attacks (the noise filter runs before the envelope) */
     if (v->n > p->osc_atk_n && v->n > p->n_atk_n && v->n > p->lin_end_n &&
-        (v->osc_env < 10737 || !p->osc_g) && (v->nenv < 10737 || p->nenv_mode == 1 || !p->noise_g) &&
-        iabs(v->f1) < 64 && iabs(v->f2) < 64 && iabs(v->e1) < 4096 && iabs(v->e2) < 4096)
-        v->active = 0;
+        (v->osc_env < 10737 || !p->osc_g) && (v->nenv < 10737 || p->nenv_mode == 1 || !p->noise_g)) {
+        if (!p->use_eq || v->tail >= PERC_RATE * 3 / 20) v->active = 0;               /* the EQ rings out for 150 ms */
+        else v->tail += cnt;
+    }
     return 1;
 }

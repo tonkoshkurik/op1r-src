@@ -49,6 +49,7 @@ typedef struct {
     int32_t prev;                       /* last 44.1 kHz output (int16 range), for the 2x interpolation */
     int32_t ao, an;                     /* tone and noise gains of the last control step (ramped between) */
     uint8_t osync, nsync, ramp;
+    uint32_t tail;                      /* samples since both envelopes ended (EQ ring-out) */
     uint8_t active;
 } perc_voice_t;
 

@@ -245,23 +245,22 @@ static void ps_update(void *scr, int dt)
 
     /* the bottom row */
     for (int i = 0; i < 4; i++) ln(Q(8 + 78 * i), Q(110), Q(78 + 78 * i), Q(110), 0x800, col4[i]);
-    if (op1_shift_held()) {
-        txt(TX_LAB, "type"); txt(TX_VAL, type < PERC_FACTORY_COUNT ? PERC_FACTORY_NAME[type] : "po-32");
-        txt(TX_LAB + 1, "drive"); put(num(v, ((w[6] > 0 ? w[6] : 0) * 100 + 16383) >> 15), "%"); txt(TX_VAL + 1, v);
-        int32_t db10 = w[7] > 0 ? (w[7] - 16384) * 120 / 16384 : 0;
-        txt(TX_LAB + 2, "level"); { char *p = v; if (db10 > 0) *p++ = '+'; put(dec1(p, db10), "db"); } txt(TX_VAL + 2, v);
-        txt(TX_LAB + 3, " "); txt(TX_VAL + 3, " ");
-    } else {
-        int32_t st = ((k[0] - 16384) * 24 + 8192) >> 14;               /* semitones */
-        txt(TX_LAB, "pitch"); put(snum(v, st), " st"); txt(TX_VAL, v);
-        /* length: x 10^((k - 16384) / 16384), shown as x0.1 .. x10 */
-        int32_t lg = ((k[1] - 16384) * 13 + ((k[1] - 16384) >> 2));   /* log2, Q16 */
+    /* each lane shows what its knob edits now: page 2 (pressed, or Shift held) or the knob */
+    int sh = op1_shift_held();
+    if (sh || op1_eng_page[0]) { txt(TX_LAB, "type"); txt(TX_VAL, type < PERC_FACTORY_COUNT ? PERC_FACTORY_NAME[type] : "po-32"); }
+    else { int32_t st = ((k[0] - 16384) * 24 + 8192) >> 14; txt(TX_LAB, "pitch"); put(snum(v, st), " st"); txt(TX_VAL, v); }
+    if (sh || op1_eng_page[1]) { txt(TX_LAB + 1, "drive"); put(num(v, ((w[6] > 0 ? w[6] : 0) * 100 + 16383) >> 15), "%"); txt(TX_VAL + 1, v); }
+    else {   /* length: x 10^((k - 16384) / 16384), shown as x0.1 .. x10 */
+        int32_t lg = ((k[1] - 16384) * 13 + ((k[1] - 16384) >> 2));
         int32_t f10 = (int32_t)(10 * (int64_t)perc_pow2(lg, 16) >> 16);
         txt(TX_LAB + 1, "length"); { char *p = put(v, "x"); dec1(p, f10); } txt(TX_VAL + 1, v);
-        txt(TX_LAB + 2, "punch"); put(snum(v, ((k[2] - 16384) * 100) >> 14), "%"); txt(TX_VAL + 2, v);
-        int32_t t10 = ((k[3] - 16384) * 30) >> 14;                      /* octaves x 10 */
-        txt(TX_LAB + 3, "tone"); { char *p = v; if (t10 > 0) *p++ = '+'; put(dec1(p, t10), " oct"); } txt(TX_VAL + 3, v);
     }
+    if (sh || op1_eng_page[2]) {
+        int32_t db10 = w[7] > 0 ? (w[7] - 16384) * 120 / 16384 : 0;
+        txt(TX_LAB + 2, "level"); { char *p = v; if (db10 > 0) *p++ = '+'; put(dec1(p, db10), "db"); } txt(TX_VAL + 2, v);
+    } else { txt(TX_LAB + 2, "punch"); put(snum(v, ((k[2] - 16384) * 100) >> 14), "%"); txt(TX_VAL + 2, v); }
+    if (sh) { txt(TX_LAB + 3, " "); txt(TX_VAL + 3, " "); }
+    else { int32_t t10 = ((k[3] - 16384) * 30) >> 14; txt(TX_LAB + 3, "tone"); { char *p = v; if (t10 > 0) *p++ = '+'; put(dec1(p, t10), " oct"); } txt(TX_VAL + 3, v); }
 }
 
 const op1_screen_t SCREEN_perc = { ps_init, ps_update };

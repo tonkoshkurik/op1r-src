@@ -111,7 +111,7 @@ int main(int argc, char **argv)
                        snprintf(p, sizeof p, "%s/perc_%s.wav", dir, PERC_FACTORY_NAME[s]); wav(p, mine, FS * 2); }
         }
     /* random patches: distribution of the differences */
-    srand(7); int over_env = 0, over_band = 0; double worst = 0; uint16_t wp[21]; int worst_i = -1;
+    srand(7); int over_env = 0, over_band = 0; int by_mode[3][2] = {{0}}; double worst = 0; uint16_t wp[21]; int worst_i = -1;
     static double emeans[10000];
     for (int r = 0; r < nrand; r++) {
         uint16_t p[21]; for (int i = 0; i < 21; i++) p[i] = (uint16_t)(rand() & 0xffff);
@@ -121,9 +121,11 @@ int main(int argc, char **argv)
         if (c.env_mean > 3) { over_env++; perc_prep_t o; perc_macro_t m; memset(&m, 0, sizeof m); perc_prepare(&o, p, &m, 127);
             printf("  #%d env %.1f band %.1f: wave %d mod %d nf %d nenv %d dist %d eq %d | Q %u lvl %u eqg %u mix %u pk %.2f/%.2f\n", r, c.env_mean, c.band_max, o.wave, o.mod_mode, o.nf_mode, o.nenv_mode, o.dist_mode, o.use_eq, p[P_NFILQ], p[P_LEVEL], p[P_EQGAIN], p[P_MIX], c.peak_ref, c.peak_mine);
             printf("    patch:"); for (int i = 0; i < 21; i++) printf(" %u", p[i]); printf("\n"); }
+        { perc_prep_t o; perc_macro_t mm; memset(&mm, 0, sizeof mm); perc_prepare(&o, p, &mm, 127); by_mode[o.mod_mode][0]++; if (c.band_max > 6) by_mode[o.mod_mode][1]++; }
         if (c.band_max > 6) over_band++;
         if (c.env_mean > worst) { worst = c.env_mean; memcpy(wp, p, sizeof wp); worst_i = r; }
     }
+    printf("band diff > 6 dB by pitch mod mode: decay %d/%d, sine %d/%d, noise %d/%d\n", by_mode[0][1], by_mode[0][0], by_mode[1][1], by_mode[1][0], by_mode[2][1], by_mode[2][0]);
     printf("random %d patches: mean envelope diff > 3 dB: %d, band diff > 6 dB: %d, worst mean env %.1f dB (#%d)\n", nrand, over_env, over_band, worst, worst_i);
     if (worst_i >= 0) { printf("worst patch:"); for (int i = 0; i < 21; i++) printf(" %u", wp[i]); printf("\n"); }
     return 0;

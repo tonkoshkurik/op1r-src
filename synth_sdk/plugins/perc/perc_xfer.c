@@ -176,6 +176,14 @@ static uint32_t signature(const uint8_t *sb)
     for (int i = 0; i < OP1_PEAK_BUCKETS; i++) { h ^= (uint16_t)pk[i]; h *= 16777619u; }
     return h ^ (uint32_t)(uintptr_t)op1_sample_data(sb);
 }
+/* the recording's length from the sampler's peaks (one per 256 samples), as granular */
+static uint32_t recorded_length(const uint8_t *sb)
+{
+    const int16_t *pk = op1_sample_peaks(sb);
+    for (int i = OP1_PEAK_BUCKETS - 1; i >= 0; i--)
+        if (pk[i] > 96) { uint32_t n = (uint32_t)(i + 1) * 256u; return n > OP1_SAMPLE_MAX ? OP1_SAMPLE_MAX : n; }
+    return 0;
+}
 /* main loop: bounded work per call (8192 samples) */
 void perc_xfer_service(void)
 {
@@ -189,8 +197,8 @@ void perc_xfer_service(void)
         perc_xfer_begin(&dec);
         dec_slot = slot; dec_pos = 0;
         dec_data = op1_sample_data(sb);
-        int32_t cap = *(const int32_t *)(sb + 0x1038);
-        dec_len = cap > 0 && cap < OP1_SAMPLE_MAX ? (uint32_t)cap : OP1_SAMPLE_MAX;
+        dec_len = recorded_length(sb);
+        if (!dec_len) dec_slot = -1;                           /* no recording: nothing to read */
         return;
     }
     if (dec_slot != slot) { sig_of[dec_slot] = 0; dec_slot = -1; return; }   /* slot changed: decode again later */

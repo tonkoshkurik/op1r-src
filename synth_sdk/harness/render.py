@@ -68,6 +68,7 @@ STATES_BY_NAME['perc'] = [                       # neon drum on a stage: blue he
     ('po-32 slot 1 (empty), hit', None, 1, 6, -1, 0, 13233, 0, 0),
     ('Shift held: type, drive 50 %, level +6 dB', (8000, 12000, 26000, 30000), 0, 10, -1, 0, 630, 16384, 24576, {'HOST_SHIFT': '1'}),
     ('high pitch, short, punchy, bright: hit', (30000, 4000, 32767, 32767), 1, 4, -1),
+    ('blue pressed (page): blue lane edits type', None, 0, 10, -1, 0b0001, 21424, 0, 0),
 ]
 FX_STATES_BY_NAME = {
     'tape': [('defaults, input bursts (page 2 unset: mix 50 %)', None, 12, 50, -1),
