@@ -186,6 +186,7 @@ static perc_xfer_t xf_dec;
 static int xf_slot = -1;
 static uint32_t xf_pos, xf_len, xf_sig[PD_SLOTS];
 static const int16_t *xf_data;
+static void reapply_transfers(int slot);
 #ifndef OP1_HOST
 static const uint8_t *kit_sample(int slot) { uint32_t *o = DRUM_SAMPLER(slot & 7); return o && o[0] ? (const uint8_t *)o[0] : 0; }
 static uint32_t kit_length(const uint8_t *sb)             /* the recording's length from its peaks (as granular) */
@@ -224,6 +225,7 @@ static void xfer_step(int slot)
                 xf_patch[slot][i][1][j] = xf_dec.have[i] & 2 ? xf_dec.patch[i][1][j] : xf_dec.patch[i][0][j];
             }
         }
+        reapply_transfers(slot);                             /* refresh keys that reference these sounds */
         xf_slot = -1;
     }
 }
@@ -234,6 +236,17 @@ static const uint16_t *sound_patch(int slot, int s, int side)
     if (s < PERC_FACTORY_COUNT) return side ? PERC_FACTORY_R[s] : PERC_FACTORY[s];
     s -= PERC_FACTORY_COUNT;
     return s < PD_XFER && xf_have[slot][s] ? xf_patch[slot][s][side] : 0;
+}
+/* keys that reference a transferred sound: fill their patch from the decoded transfer (after a decode, or a load). */
+static void reapply_transfers(int slot)
+{
+    for (int p = 0; p < PD_PADS; p++) {
+        pd_key *k = &kit[slot][p];
+        if (k->sound < PERC_FACTORY_COUNT) continue;
+        int i = k->sound - PERC_FACTORY_COUNT;
+        if (i < PD_XFER && xf_have[slot & 7][i])
+            for (int j = 0; j < 21; j++) { k->patch[j] = xf_patch[slot & 7][i][0][j]; k->right[j] = xf_patch[slot & 7][i][1][j]; }
+    }
 }
 
 /* ---- persistence ---- */
@@ -274,13 +287,12 @@ static uint16_t clampw(int32_t x) { return (uint16_t)(x < 0 ? 0 : x > 65535 ? 65
 /* compact per-key save ("pk", docs/43): sound, 6 knobs, morph (8 ints); a built-in sound rebuilds its patch from
  * PERC_FACTORY/PERC_FACTORY_R by index, so only a transferred sound also stores its 21+21 patch words (50 ints).
  * A fresh kit saves ~1 KB, well under the stock save path's budget (a 5 KB patch froze R246 on save). */
-static int pk_len(const pd_key *k) { return k->sound >= PERC_FACTORY_COUNT ? 8 + 42 : 8; }
+static int pk_len(const pd_key *k) { (void)k; return 8; }   /* a transferred key stores only its sound index; its patch comes from the decoded transfer */
 static int32_t pk_put(const pd_key *k, int i)
 {
     switch (i) {
     case 0: return k->sound;  case 1: return k->pitch; case 2: return k->length; case 3: return k->punch;
-    case 4: return k->tone;   case 5: return k->drive; case 6: return k->level;  case 7: return k->morph;
-    default: return i < 29 ? k->patch[i - 8] : k->right[i - 29];
+    case 4: return k->tone;   case 5: return k->drive; default: return i == 6 ? k->level : k->morph;
     }
 }
 static void pk_get(pd_key *dst, const int32_t *a, int n)
@@ -290,9 +302,9 @@ static void pk_get(pd_key *dst, const int32_t *a, int n)
     k.sound = (uint8_t)(a[0] < 0 ? 0 : a[0] > 255 ? 255 : a[0]);
     k.pitch = clamp15(a[1]); k.length = clamp15(a[2]); k.punch = clamp15(a[3]);
     k.tone = clamp15(a[4]);  k.drive = clamp15(a[5]);  k.level = clamp15(a[6]); k.morph = clamp15(a[7]);
-    if (n >= 50) { for (int i = 0; i < 21; i++) { k.patch[i] = clampw(a[8 + i]); k.right[i] = clampw(a[29 + i]); } }
+    if (n >= 50) { for (int i = 0; i < 21; i++) { k.patch[i] = clampw(a[8 + i]); k.right[i] = clampw(a[29 + i]); } }   /* an old compact-transferred save */
     else if (k.sound < PERC_FACTORY_COUNT) { for (int i = 0; i < 21; i++) { k.patch[i] = PERC_FACTORY[k.sound][i]; k.right[i] = PERC_FACTORY_R[k.sound][i]; } }
-    else { k.sound = 0; for (int i = 0; i < 21; i++) { k.patch[i] = PERC_FACTORY[0][i]; k.right[i] = PERC_FACTORY_R[0][i]; } }
+    else { for (int i = 0; i < 21; i++) { k.patch[i] = PERC_FACTORY[0][i]; k.right[i] = PERC_FACTORY_R[0][i]; } }   /* transferred: keep the index; reapply fills the patch once the transfer decodes */
     *dst = k;
 }
 
@@ -331,6 +343,7 @@ static void pd_slot_loaded(int slot, void *op1r)
             }
         }
     }
+    reapply_transfers(slot);                                 /* transferred-sound keys: fill from an already-decoded transfer */
     claimed[slot] = 1;
 }
 /* keys of the slot (bit per key) -> op1r.pk[key], a compact int array each (pk_put). Nothing is removed. Only while no
@@ -506,10 +519,9 @@ static void pd_update(void *scr, int dt)
     if (k->sound < PERC_FACTORY_COUNT) cat(name, PERC_FACTORY_NAME[k->sound]);
     else { char *p = cat(name, "po-32 "); num2(p, k->sound - PERC_FACTORY_COUNT + 1); }
 #if PERC_BC
-    { char *p = idx;
+    { char *p = idx;                                     /* "u.. a.." — the two phase codes, never clipped */
       *p++='u'; p=num2(p,(int)(perc_bc_ui%100));
-      *p++='a'; p=num2(p,(int)(perc_bc_au%100));
-      *p++='t'; p=num2(p,(int)(perc_bc_tick%100)); }
+      *p++=' '; *p++='a'; p=num2(p,(int)(perc_bc_au%100)); }
 #else
     if (xf_slot >= 0) cat(idx, "read..");
     else { char *p = cat(idx, "key "); num2(p, pad + 1); }
