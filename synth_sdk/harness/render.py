@@ -52,7 +52,7 @@ STATES_BY_NAME['aether'] = [                     # HOST_ACCEL: sensor X,Y,Z afte
     ('blue + white page 2 (dead zone, rate)', None, 1, 40, -1, 0b0101, 20000, 0, 26000),
     ('all knobs max, front up 40 deg', (32767,) * 4, 1, 60, -1, 0, 0, 0, 0, {'HOST_ACCEL': '0,-10531,12551'}),
 ]
-STATES_BY_NAME['perc'] = [                       # neon drum on a stage: blue head, green rings, white strike, orange floor
+STATES_BY_NAME['percsyn'] = [                       # neon drum on a stage: blue head, green rings, white strike, orange floor
     ('kick, idle', None, 0, 10, -1),
     ('kick, hit: strike + rings', None, 1, 3, -1),
     ('kick, long, rings out (frame 18)', (16384, 30000, 16384, 16384), 1, 18, -1),

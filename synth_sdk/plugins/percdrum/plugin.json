@@ -1,0 +1,12 @@
+{
+  "name": "perc",
+  "author": "perc for op1r; PO-32 patch model after libpo32 (MIT, Eric Lewis)",
+  "kind": "drum",
+  "symbol": "PERCDRUM",
+  "sources": [
+    "perc_drum.c",
+    "../perc/perc_dsp.c",
+    "../perc/perc_xfer.c",
+    "../perc/perc_draw.c"
+  ]
+}

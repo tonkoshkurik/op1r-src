@@ -1,5 +1,5 @@
 {
-  "name": "perc",
+  "name": "percsyn",
   "author": "perc for op1r; PO-32 patch model after libpo32 (MIT, Eric Lewis)",
   "kind": "synth",
   "symbol": "ENGINE_perc",
@@ -7,7 +7,8 @@
     "perc.c",
     "perc_dsp.c",
     "perc_xfer.c",
-    "perc_screen.c"
+    "perc_screen.c",
+    "perc_draw.c"
   ],
   "defaults": [
     16384,
