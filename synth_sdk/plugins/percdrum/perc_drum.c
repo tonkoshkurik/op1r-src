@@ -114,7 +114,7 @@ volatile uint32_t pd_hit_seq; volatile int32_t pd_hit_vel;
 /* ---- breadcrumbs (debug build): the last step each thread entered, shown top-right on the perc page as
  * "u<ui> a<audio> t<tick>". A freeze leaves the last frame on screen: tick frozen + a moving stopped -> that thread
  * hung there; tick moving but animation lags -> heavy per-frame work at that step. Remove by clearing PERC_BC. */
-#define PERC_BC 1
+#define PERC_BC 0                                        /* 1 = on-screen breadcrumb readout (debug) */
 #if PERC_BC
 volatile uint32_t perc_bc_ui, perc_bc_au, perc_bc_tick;
 #define BCU(x) (perc_bc_ui = (x))
@@ -443,13 +443,22 @@ static void pd_changed(int slot, int pad, int f0, int f1)    /* the key changed:
     pd_flush();
 }
 static int pd_sound_count(int slot) { int n = PERC_FACTORY_COUNT; for (int i = 0; i < PD_XFER; i++) if (xf_have[slot][i]) n = PERC_FACTORY_COUNT + i + 1; return n; }
-static void pd_set_sound(int slot, int pad, int s)           /* both sides; the key's morph stays */
+static void pd_set_sound(int slot, int pad, int s)           /* a new sound resets the knobs to neutral */
 {
     const uint16_t *l = sound_patch(slot, s, 0), *r = sound_patch(slot, s, 1);
     if (!l) return;
     pd_key *k = &kit[slot][pad];
     for (int i = 0; i < 21; i++) { k->patch[i] = l[i]; k->right[i] = r[i]; }
     k->sound = (uint8_t)s;
+    k->pitch = k->length = k->punch = k->tone = 16384; k->drive = 0; k->level = 16384; k->morph = 0;
+}
+/* step a word on a grid centred on `center`, so the centre (0 st, x1.0, 0 dB) is always reachable even from an
+ * off-grid loaded value (snaps to the nearest grid point, then moves `st`). */
+static int16_t snap_step(int16_t w, int32_t center, int32_t step, int st)
+{
+    int32_t rel = (int32_t)w - center;
+    int32_t q = (rel >= 0 ? rel + step / 2 : rel - step / 2) / step;
+    return clamp15(center + (q + st) * step);
 }
 static int pd_knob(int knob, int delta)
 {
@@ -473,13 +482,14 @@ static int pd_knob(int knob, int delta)
             return 1;
         }
         int16_t *w = knob == 1 ? &k->drive : knob == 2 ? &k->level : &k->morph;
-        *w = clamp15(*w + st * 1024);
+        int32_t center = knob == 2 ? 16384 : 0;              /* drive/morph from 0, level from 0 dB */
+        *w = snap_step(*w, center, 1024, st);
         int f = knob == 1 ? 25 : knob == 2 ? 26 : 28;
         pd_changed(slot, pad, f, f + 1);
         return 1;
     }
     int16_t *w = knob == 0 ? &k->pitch : knob == 1 ? &k->length : knob == 2 ? &k->punch : &k->tone;
-    *w = clamp15(*w + st * (knob == 0 ? 683 : 1024));         /* pitch: a semitone a click */
+    *w = snap_step(*w, 16384, knob == 0 ? 683 : 1024, st);   /* pitch: a semitone a click; centre always reachable */
     pd_changed(slot, pad, 21 + knob, 22 + knob);
     return 1;
 }
@@ -523,8 +533,11 @@ static void pd_update(void *scr, int dt)
       *p++='u'; p=num2(p,(int)(perc_bc_ui%100));
       *p++=' '; *p++='a'; p=num2(p,(int)(perc_bc_au%100)); }
 #else
-    if (xf_slot >= 0) cat(idx, "read..");
-    else { char *p = cat(idx, "key "); num2(p, pad + 1); }
+    if (xf_slot >= 0) cat(idx, "read..");                                 /* a transfer is being decoded */
+    else if (k->sound >= PERC_FACTORY_COUNT) {                            /* a po-32 sound: is it present? */
+        int i = k->sound - PERC_FACTORY_COUNT;
+        cat(idx, i < PD_XFER && xf_have[slot][i] ? "ok" : "empty");
+    } else { char *p = cat(idx, "key "); num2(p, pad + 1); }
 #endif
     v.name = name; v.idx = idx;
     v.shift = SHIFT_HELD; v.page2[0] = v.page2[1] = v.page2[2] = 0;
