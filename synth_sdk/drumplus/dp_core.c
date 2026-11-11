@@ -202,11 +202,9 @@ void dpu_ui_build(void) { for (int i = 0; i < op1_drum_n; i++) op1_drums[i]->ui_
 void dpu_ui_load(void) { for (int i = 0; i < op1_drum_n; i++) op1_drums[i]->ui_load(); }
 static const op1_drum_t *ui_drum(void) { const op1_drum_t *d = drum_for_slot(UI_SLOT_CUR); return d ? d : op1_drum_n ? op1_drums[0] : 0; }
 void *dpu_screen_for(int id) { const op1_drum_t *d = ui_drum(); return d ? d->screen_for(id) : 0; }
-void dpu_sync(int editor_open_on_10)
-{
-    const op1_drum_t *d = ui_drum();                                  /* each restores the stock pages if not its kit: */
-    for (int i = 0; i < op1_drum_n; i++) if (op1_drums[i] != d) op1_drums[i]->sync(editor_open_on_10);
-    if (d) d->sync(editor_open_on_10);                                /* the slot's plugin last */
-}
+/* only the shown slot's plugin sets the page table (its page or the stock ones): one writer per key event, as with drum+
+ * alone. (Letting every plugin restore the stock pages first flipped the table on every key press while the GUI thread
+ * may draw from it.) */
+void dpu_sync(int editor_open_on_10) { const op1_drum_t *d = ui_drum(); if (d) d->sync(editor_open_on_10); }
 int dpu_knob(int knob, int delta) { const op1_drum_t *d = ui_drum(); return d ? d->knob(knob, delta) : 0; }
 int dpu_key(int code, int pressed) { const op1_drum_t *d = ui_drum(); return d ? d->key(code, pressed) : 0; }

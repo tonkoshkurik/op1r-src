@@ -3,8 +3,8 @@
  *      -o harness/build/drumroute_test && harness/build/drumroute_test       (from synth_sdk)
  * 1. drum+ alone: every voice, page, knob and type-job call goes where the one-plugin core sent it.
  * 2. drum+ and a second plugin (perc, row 3): its kits' voices, pages and keys go to it, a voice keeps its plugin
- *    across a slot change, the type job matrix (stock -> perc -> drum+ -> stock, perc row with perc absent), the
- *    stock pages are restored by the others before the slot's plugin syncs. */
+ *    across a slot change, the type job matrix (stock -> perc -> drum+ -> stock, perc row with perc absent), only the
+ *    shown slot's plugin syncs the pages (one writer per key event). */
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -84,21 +84,21 @@ int main(void)
     /* ---- 2. drum+ and perc ---- */
     op1_drums[1] = &perc; op1_drum_rows[1] = 3; op1_drum_n = 2;
     h_ui_slot = 1; drum_claim_sync = 1;
-    job(1, 3); expect("perc.job dplus.loaded auto: dplus.sync(stock) perc.sync(own) ");   /* perc claims slot 1; drum+ is told; its page */
+    job(1, 3); expect("perc.job dplus.loaded auto: perc.sync(own) ");   /* perc claims slot 1; drum+ is told; its page (owner only) */
     assert(perc_is(1) && !dplus_is(1));
     h_drum_slot = 1;
     dp_fw_note_on(v[2], 0); dp_fw_render(v[2], out, 0); expect("perc.on perc.render ");
     h_drum_slot = 0;                                                 /* slot change mid-sound: v2 stays perc's */
     dp_fw_render(v[2], out, 0); dp_fw_note_off(v[2], 0); expect("perc.render perc.off ");
     dp_fw_note_on(v[2], 0); expect("dplus.on ");                      /* a new hit on slot 0 (stock): drum+ */
-    h_ui_slot = 1; dpu_sync(0); expect("dplus.sync(stock) perc.sync(own) ");   /* the owner last */
+    h_ui_slot = 1; dpu_sync(0); expect("perc.sync(own) ");                     /* only the owner writes the page table */
     assert(!strcmp((const char *)dpu_screen_for(0x10), "perc"));
     assert(dpu_knob(0, 1) == 1); expect("perc.knob ");
     assert(dpu_key(0x3B, 1) == 1); expect("perc.key ");
-    h_ui_slot = 0; dpu_sync(0); expect("perc.sync(stock) dplus.sync(stock) ");
-    h_ui_slot = 1; job(1, 2); expect("dplus.job perc.loaded auto: perc.sync(stock) dplus.sync(own) ");   /* perc kit -> drum+: drum+'s page */
+    h_ui_slot = 0; dpu_sync(0); expect("dplus.sync(stock) ");
+    h_ui_slot = 1; job(1, 2); expect("dplus.job perc.loaded auto: dplus.sync(own) ");   /* perc kit -> drum+: drum+'s page */
     assert(dplus_is(1) && !perc_is(1));
-    job(1, 3); expect("perc.job dplus.loaded auto: dplus.sync(stock) perc.sync(own) ");   /* back to perc */
+    job(1, 3); expect("perc.job dplus.loaded auto: perc.sync(own) ");   /* back to perc */
     job(1, 1); expect("stock.job perc.job ");                         /* perc kit -> dbox: perc lets go */
     assert(!perc_is(1) && !dplus_is(1));
     job(1, 4); expect("");                                           /* row 4: nobody */
